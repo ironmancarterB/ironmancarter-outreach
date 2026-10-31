@@ -288,7 +288,7 @@ function ContactsSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
         const ok = await mutate(() => api.post(`/api/prospects/${d.prospect.id}/contacts`, body), 'Contact added')
         if (ok) setAdding(false)
       }} />}
-      <p className="mt-3 text-xs text-zinc-500">Eligibility shows whether a contact could ever be emailed automatically. Nothing is sent in this build.</p>
+      <p className="mt-3 text-xs text-zinc-500">Only direct and confirmed agency contacts can be emailed, and only after every other check. Sources, evidence and verification are in <a className="text-brand-600 hover:underline" href="#/contacts">Contact Discovery</a>.</p>
     </Section>
   )
 }
@@ -306,6 +306,9 @@ function ContactRow({ c, mutate }: { c: Contact; mutate: Mutate }) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{c.email ?? 'Contact form'}</span>
         {c.is_primary ? <Badge tone="blue">Primary</Badge> : null}
+        <Badge tone={c.contact_tier === 'VERIFIED_DIRECT' ? 'green' : c.contact_tier === 'VERIFIED_PORTAL' ? 'blue' : c.contact_tier === 'VERIFIED_AGENCY' && c.agency_confirmed ? 'violet' : 'amber'} title={c.decision_note ?? undefined}>
+          {{ VERIFIED_DIRECT: 'Direct', VERIFIED_AGENCY: c.agency_confirmed ? 'Agency (confirmed)' : 'Agency (not confirmed)', VERIFIED_PORTAL: 'Portal / form', PUBLIC_UNVERIFIED: 'Public, unverified' }[c.contact_tier]}
+        </Badge>
         <EligibilityBadge status={c.eligibility.status} />
         <Badge tone={c.verification_status === 'verified' ? 'green' : c.verification_status === 'failed' ? 'red' : 'gray'}>
           {c.verification_status}{c.verified_at ? ` ${relative(c.verified_at)}` : ''}

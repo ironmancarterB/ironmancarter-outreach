@@ -48,6 +48,9 @@ export interface Contact {
   jurisdiction: string
   is_primary: number
   eligibility: Eligibility
+  contact_tier: 'VERIFIED_DIRECT' | 'VERIFIED_AGENCY' | 'VERIFIED_PORTAL' | 'PUBLIC_UNVERIFIED'
+  agency_confirmed: string | null
+  decision_note: string | null
 }
 
 export interface ProspectDetail {

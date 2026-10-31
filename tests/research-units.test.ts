@@ -121,7 +121,8 @@ describe('email classification', () => {
     expect(classifyEmail('jdoe@brand.test', 'brand.test').kind).toBe('personal')
     expect(classifyEmail('support@brand.test', 'brand.test').kind).toBe('excluded')
     expect(classifyEmail('privacy@brand.test', 'brand.test').kind).toBe('excluded')
-    expect(classifyEmail('partnerships@gmail.com', 'brand.test').kind).toBe('off_domain')
+    expect(classifyEmail('partnerships@gmail.com', 'brand.test').kind).toBe('free_mail')
+    expect(classifyEmail('partnerships@other.test', 'brand.test').kind).toBe('off_domain')
   })
 })
 

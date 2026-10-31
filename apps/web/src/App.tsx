@@ -5,6 +5,7 @@ import { useApi, usePoll } from './lib/api'
 import Overview from './pages/Overview'
 import Discovery from './pages/Discovery'
 import Prospects from './pages/Prospects'
+import Contacts from './pages/Contacts'
 import Autopilot from './pages/Autopilot'
 import Outreach from './pages/Outreach'
 import Drafts from './pages/Drafts'
@@ -18,6 +19,7 @@ const NAV = [
   { id: 'overview', label: 'Overview', icon: '◎' },
   { id: 'discovery', label: 'Brand Discovery', icon: '⌕' },
   { id: 'prospects', label: 'Prospects', icon: '▤' },
+  { id: 'contacts', label: 'Contact Discovery', icon: '@' },
   { id: 'drafts', label: 'Email Drafts', icon: '✎' },
   { id: 'outreach', label: 'Outreach', icon: '➤' },
   { id: 'replies', label: 'Conversations', icon: '✉' },
@@ -65,6 +67,7 @@ export default function App() {
   const content = (() => {
     switch (page) {
       case 'discovery': return <Discovery tab={parts[0]} openId={parts[1] ? Number(parts[1]) : null} />
+      case 'contacts': return <Contacts tab={parts[0]} />
       case 'prospects': return <Prospects openId={parts[0] ? Number(parts[0]) : null} />
       case 'autopilot': return <Autopilot />
       case 'drafts': return parts[0] === 'pitch' && parts[1] ? <PitchEditor id={Number(parts[1])} /> : <Drafts tab={parts[0]} />

@@ -41,6 +41,8 @@ import { defaultSecretStore, memoryStore } from '../../../packages/gmail/secrets
 import { config } from './config'
 import { afterCrmChange, outreachRoutes } from './outreachRoutes'
 import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
+import { contactStatus, getRun, queueContactResearch } from '../../../packages/research/contacts'
+import { addManualContact, contactDiscovery, contactFindings, reviewContact } from '../../../packages/research/contactReview'
 import { recoverInterruptedSends } from '../../../packages/outreach/send'
 import { LOCKED, VALIDATORS, validateSetting } from './settingsPolicy'
 
@@ -511,6 +513,25 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   })
 
   outreachRoutes(app, { db, gmail, dataDir, aiDeps: opts.aiDeps })
+
+  // ---------- Contact discovery (runs are processed by the research worker) ----------
+  app.get('/api/contact-discovery', async () => contactDiscovery(db))
+  app.get('/api/contact-discovery/runs/:id', async (req) => getRun(db, id((req.params as Body).id)))
+  app.get('/api/prospects/:id/contact-findings', async (req) => contactFindings(db, id((req.params as Body).id)))
+  app.post('/api/prospects/:id/find-contacts', async (req, reply) => {
+    const r = queueContactResearch(db, id((req.params as Body).id), { refresh: ((req.body ?? {}) as Body).refresh === true, reason: 'manual' })
+    return reply.code(r.alreadyQueued ? 200 : 202).send(r)
+  })
+  // Queues every company without a verified email or confirmed agency contact (cached pages are reused).
+  app.post('/api/contact-discovery/backfill', async () => {
+    const ids = all<{ id: number }>(db, "SELECT id FROM prospects WHERE stage NOT IN ('opted_out', 'won', 'lost', 'not_interested') AND domain IS NOT NULL").map((r) => r.id)
+      .filter((pid) => !['VERIFIED_DIRECT', 'VERIFIED_AGENCY'].includes(contactStatus(db, pid)))
+    const queued = ids.map((pid) => queueContactResearch(db, pid, { reason: 'backfill' })).filter((r) => !r.alreadyQueued).length
+    logActivity(db, 'contacts.backfill_queued', `Queued contact research for ${queued} compan${queued === 1 ? 'y' : 'ies'} without a verified email`)
+    return { queued, considered: ids.length }
+  })
+  app.post('/api/prospects/:id/contacts/manual', async (req, reply) => reply.code(201).send(addManualContact(db, id((req.params as Body).id), (req.body ?? {}) as Body)))
+  app.post('/api/contacts/:id/review', async (req) => reviewContact(db, id((req.params as Body).id), (req.body ?? {}) as Body))
 
   // ---------- Dashboard (production build) ----------
   if (opts.webDist && existsSync(opts.webDist)) {

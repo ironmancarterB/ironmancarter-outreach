@@ -10,6 +10,7 @@ import { classifyEmail, extractPage, type ExtractedPage } from './extract'
 import { COMMON_PATHS, detectSignals, evidencePriority, pageSignals, rankLinks, SIGNAL_LABELS, type Finding, type Signal } from './evidence'
 import type { Fetcher, FetchResult } from './fetcher'
 import { CONCEPT_TEMPLATES, scoreResearch } from './score'
+import { queueContactResearch } from './contacts'
 
 export interface Candidate {
   id: number
@@ -150,16 +151,19 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
   const found = new Map<string, FoundEmail>()
   const skipped = { personal: 0, excluded: 0, offDomain: 0 }
   let formUrl: { url: string; fetchedAt: string } | null = null
+  // The domain research started from belongs to the brand too (runwayml.com redirects to runway.com).
+  const owned = new Set([siteDomain, cand.domain])
   for (const p of pages) {
     for (const email of p.page.emails) {
-      const c = classifyEmail(email, siteDomain)
+      const c = classifyEmail(email, siteDomain, owned)
       if (c.kind === 'role') {
         if (!found.has(email)) found.set(email, { email, rank: c.rank, label: c.label, sourceUrl: p.url, fetchedAt: p.fetchedAt })
       } else if (c.kind === 'personal') skipped.personal++
       else if (c.kind === 'excluded') skipped.excluded++
-      else skipped.offDomain++
+      else if (c.kind === 'off_domain') skipped.offDomain++
     }
-    if (!formUrl && p.page.hasContactForm && /contact|partner|creator|influencer|affiliate|sponsor|press/i.test(new URL(p.url).pathname)) {
+    if (!formUrl && p.page.hasContactForm && /contact|partner|creator|influencer|affiliate|sponsor|press/i.test(new URL(p.url).pathname)
+      && !/enterprise|sales|support|demo|consult|reseller/i.test(new URL(p.url).pathname)) {
       formUrl = { url: p.url, fetchedAt: p.fetchedAt }
     }
   }
@@ -223,6 +227,8 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
       if (formUrl && !emails.length) addSource(formUrl.url, 'contact', 'Contact form', null, formUrl.fetchedAt)
       if (notes.length) run(db, 'INSERT INTO notes (prospect_id, body, created_at) VALUES (?, ?, ?)', p.id, `Research notes:\n• ${notes.join('\n• ')}`, now)
       run(db, 'UPDATE research_fetches SET prospect_id = ? WHERE candidate_id = ?', p.id, cand.id)
+      // No published address yet: queue the deeper contact research (portals, press pages, agencies).
+      if (!emails.length) queueContactResearch(db, p.id, { reason: 'new_brand' })
       logActivity(db, 'research.completed', `Researched ${pages.length} page(s): score ${scored.score}, ${emails.length} verified email(s)${!emails.length && formUrl ? ', contact form' : ''}`,
         { prospectId: p.id, data: { batch: cand.batch_id, signals: [...signals] } })
       return p.id

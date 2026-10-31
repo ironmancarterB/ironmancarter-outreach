@@ -73,6 +73,33 @@ The candidate pool starts with ~210 real brands across the eight categories (nam
 `packages/db/brandSeeds.ts`). Add more under Brand Discovery → Candidates. With the Ollama provider selected, campaign
 concepts are drafted locally from the recorded facts; otherwise a per-category template is used.
 
+## Contact discovery
+
+**Contact Discovery** (sidebar) shows how every company can be reached: verified email, verified agency, official portal or
+form, needs manual verification, or no contact method. **Find more contacts** queues a bounded, cached research run that the
+research worker processes (robots.txt obeyed, one request per site every 1.5 s, at most 14 page fetches plus 2 agency pages,
+no logins, no JavaScript, protection never bypassed). **Refresh** ignores the 30-day page cache. **Research all without a
+verified email** queues every company that lacks one.
+
+Sources, in priority order: official contact pages; official creator/influencer pages; ambassador/affiliate pages; press and media
+pages (including press sites on the brand's other domains); the site's sitemap for those pages; official social profiles (listed for
+you to check: they need a login, so they are not read); agency pages the brand itself links to for PR or partnership inquiries.
+Professional profiles and business directories are manual entry only (they require logins, forbid automated access, or charge).
+
+| Tier | Meaning | Can be emailed? |
+|---|---|---|
+| `VERIFIED_DIRECT` | A business mailbox the brand publishes on its own site (or its structured contact data), on its domain or a domain it demonstrably owns (e.g. the domain research was redirected from) | Yes, after every other check (country, approval, compliance, confirmation) |
+| `VERIFIED_AGENCY` | An agency address with evidence it represents the brand | Only once independently confirmed: named on the brand's own site, or confirmed by you |
+| `VERIFIED_PORTAL` | An official application portal or contact form linked from the brand's own program/contact page | No: you submit it yourself (Manual submissions) |
+| `PUBLIC_UNVERIFIED` | Public but unconfirmed (e.g. only in a page's embedded data, or on another domain without explanation) | No, until you verify it |
+
+Every contact stores the company, type, address or URL, exact source URL, date verified, source category, evidence (the text around
+it, with any other addresses removed), tier and confidence, plus why it was accepted. Every rejected address is listed with its
+reason; personal-looking and free-mail addresses are recorded only in masked form. Addresses are never guessed or derived from names,
+nothing comes from private databases, and suppressed addresses are skipped. A research contact that is no longer on its source page
+is marked failed; contacts you entered or verified are never changed. **Add manually** requires the source page and evidence and
+applies the same tier rules; **Verify…** upgrades a public contact after you check it (agencies need the brand-side confirmation).
+
 ## Pitches and approval (Phase 3)
 
 1. Approve companies in **Brand Discovery → Review queue**. Only approved companies can be drafted.
@@ -261,7 +288,7 @@ If you send an app draft from Gmail yourself, the next sync records it like an a
 | `packages/crm/` | Companies, contacts, tags, notes, suppression list, CSV import/export, overview numbers, creator analytics. |
 | `packages/mediakit/` | Media kit versions (copied into `data/media-kit/`, never modified or deleted). |
 | `packages/ai/` | AI router with mock, Ollama and (locked) Anthropic providers, budget guard, cache and usage ledger. |
-| `packages/research/` | Polite fetcher + robots.txt, page extraction, evidence detection, scoring, research pipeline, batches, durable worker queue. |
+| `packages/research/` | Polite fetcher + robots.txt, page extraction, evidence detection, scoring, research pipeline, batches, durable worker queue, contact discovery (`contacts.ts`) and manual contact review (`contactReview.ts`). |
 | `apps/worker/` | The research worker process (`npm run worker`). Safe to stop any time; interrupted work resumes. |
 | `packages/pitch/` | Fact gathering, program classification, template writer, local-AI writer, checks, evidence validation, approvals, manual applications, packages. |
 | `packages/gmail/` | Google OAuth + Gmail client (`google.ts`; the only send call needs a confirmation from `outreach/send.ts`), Keychain secret storage, MIME builder/parser, connection and draft services. |

@@ -1,7 +1,7 @@
 import { all, get, getSetting, logActivity, nowIso, run, tx, type DB, type Param } from '../db'
 import { AppError, invalid, notFound } from '../core/errors'
 import { evaluateEligibility, type EligibilityResult } from '../core/eligibility'
-import { nameKey, normalizeDomain, normalizeEmail, normalizeUrl } from '../core/normalize'
+import { emailDomain, nameKey, normalizeDomain, normalizeEmail, normalizeUrl } from '../core/normalize'
 import { FIT_FACTORS, fitTier, scoreFit, type FitBreakdown } from '../core/scoring'
 import { isStage, stageLabel, type StageId } from '../core/stages'
 import { addSuppression, isDomainSuppressed, isEmailSuppressed } from './suppressions'
@@ -54,6 +54,17 @@ export interface Contact {
   verification_status: 'unverified' | 'verified' | 'failed'
   verified_at: string | null
   jurisdiction: string
+  discovered_by: 'manual' | 'research' | 'csv'
+  contact_tier: ContactTier
+  contact_type: string | null
+  source_category: string | null
+  evidence: string | null
+  confidence: 'high' | 'medium' | 'low' | null
+  agency_name: string | null
+  agency_confirmed: 'brand_site' | 'manual' | null
+  decision_note: string | null
+  manually_verified: number
+  last_checked_at: string | null
   is_primary: number
   created_at: string
   updated_at: string
@@ -81,6 +92,13 @@ export type ProspectInput = Partial<{
   next_follow_up_date: string | null
 }>
 
+// VERIFIED_DIRECT: published by the brand for business inquiries. VERIFIED_AGENCY: an agency address with evidence it
+// represents the brand. VERIFIED_PORTAL: official application form or creator portal. PUBLIC_UNVERIFIED: public but
+// needs your verification (never emailed). See packages/research/contacts.ts.
+export type ContactTier = 'VERIFIED_DIRECT' | 'VERIFIED_AGENCY' | 'VERIFIED_PORTAL' | 'PUBLIC_UNVERIFIED'
+export const CONTACT_TIERS: ContactTier[] = ['VERIFIED_DIRECT', 'VERIFIED_AGENCY', 'VERIFIED_PORTAL', 'PUBLIC_UNVERIFIED']
+export const CONTACT_SOURCE_CATEGORIES = ['official_contact', 'official_creator', 'official_affiliate', 'official_press', 'official_site', 'social', 'agency', 'professional_profile', 'directory', 'manual'] as const
+
 export type ContactInput = Partial<{
   name: string | null
   role: string | null
@@ -92,6 +110,16 @@ export type ContactInput = Partial<{
   jurisdiction: string
   is_primary: boolean
   discovered_by: 'manual' | 'research' | 'csv'
+  contact_tier: ContactTier
+  contact_type: string | null
+  source_category: string | null
+  evidence: string | null
+  confidence: 'high' | 'medium' | 'low' | null
+  agency_name: string | null
+  agency_confirmed: 'brand_site' | 'manual' | null
+  decision_note: string | null
+  manually_verified: boolean
+  last_checked_at: string | null
 }>
 
 export interface DuplicateMatch {
@@ -451,6 +479,23 @@ function contactColumns(input: ContactInput, existing?: Contact): Record<string,
     if (!['manual', 'research', 'csv'].includes(input.discovered_by as string)) throw invalid('Unknown contact origin')
     out.discovered_by = input.discovered_by!
   }
+  if (has('contact_tier')) {
+    if (!CONTACT_TIERS.includes(input.contact_tier as ContactTier)) throw invalid('Unknown contact tier')
+    out.contact_tier = input.contact_tier!
+  }
+  for (const k of ['contact_type', 'source_category', 'evidence', 'agency_name', 'decision_note', 'last_checked_at'] as const) {
+    if (has(k)) out[k] = text(input[k], k.replace('_', ' '), k === 'evidence' ? 1000 : 300)
+  }
+  if (has('source_category') && out.source_category && !(CONTACT_SOURCE_CATEGORIES as readonly string[]).includes(out.source_category as string)) throw invalid('Unknown source category')
+  if (has('confidence')) {
+    if (input.confidence != null && !['high', 'medium', 'low'].includes(input.confidence)) throw invalid('Confidence must be high, medium or low')
+    out.confidence = input.confidence ?? null
+  }
+  if (has('agency_confirmed')) {
+    if (input.agency_confirmed != null && !['brand_site', 'manual'].includes(input.agency_confirmed)) throw invalid('Unknown agency confirmation')
+    out.agency_confirmed = input.agency_confirmed ?? null
+  }
+  if (has('manually_verified')) out.manually_verified = input.manually_verified ? 1 : 0
   if (has('verification_status')) {
     const s = input.verification_status
     if (!['unverified', 'verified', 'failed'].includes(s as string)) throw invalid('Unknown verification status')
@@ -465,6 +510,21 @@ function contactColumns(input: ContactInput, existing?: Contact): Record<string,
   return out
 }
 
+// Tier for contacts added without one (your contact form, CSV import, earlier research): only an address on the
+// company's own domain, verified against a source page, counts as direct. Everything else needs verification.
+function deriveTier(prospect: Prospect, c: Record<string, Param | undefined>): Record<string, Param> {
+  const email = c.email as string | null | undefined
+  if (!email && c.contact_form_url) return { contact_tier: 'VERIFIED_PORTAL', contact_type: (c.contact_type as string) ?? 'contact_form' }
+  const verified = c.verification_status === 'verified' && !!c.source_url
+  const onDomain = !!email && !!prospect.domain && emailDomain(email) === prospect.domain
+  if (verified && onDomain) {
+    const manual = c.discovered_by !== 'research'
+    return { contact_tier: 'VERIFIED_DIRECT', manually_verified: manual ? 1 : 0, confidence: (c.confidence as string) ?? 'high',
+      decision_note: (c.decision_note as string) ?? (manual ? 'Verified by you against its source page.' : 'Published on the brand\'s own site.') }
+  }
+  return { contact_tier: 'PUBLIC_UNVERIFIED', decision_note: (c.decision_note as string) ?? (!verified ? 'Not verified against a published source yet.' : `Not on ${prospect.company_name}'s domain; verify who it belongs to.`) }
+}
+
 function emailConflict(db: DB, email: string, excludeContactId = -1) {
   const other = get<{ company_name: string }>(db,
     'SELECT p.company_name FROM contacts c JOIN prospects p ON p.id = c.prospect_id WHERE c.email = ? AND c.id != ?', email, excludeContactId)
@@ -476,6 +536,7 @@ export function addContact(db: DB, prospectId: number, input: ContactInput): Con
   const cols = contactColumns(input)
   if (!cols.email && !cols.contact_form_url) throw invalid('A contact needs an email address or a contact form URL')
   if (cols.email) emailConflict(db, cols.email as string)
+  if (!('contact_tier' in cols)) Object.assign(cols, deriveTier(prospect, cols))
   const now = nowIso()
   cols.prospect_id = prospectId
   cols.created_at = now
@@ -504,6 +565,10 @@ export function updateContact(db: DB, contactId: number, input: ContactInput): C
   const form = 'contact_form_url' in cols ? cols.contact_form_url : existing.contact_form_url
   if (!email && !form) throw invalid('A contact needs an email address or a contact form URL')
   if (emailChanged && cols.email) emailConflict(db, cols.email as string, contactId)
+  // Re-derive the tier when the address, its source or its verification changes (unless a tier is given).
+  if (!('contact_tier' in cols) && (emailChanged || sourceChanged || 'verification_status' in cols)) {
+    Object.assign(cols, deriveTier(getProspect(db, existing.prospect_id), { ...existing, ...cols }))
+  }
   cols.updated_at = nowIso()
   tx(db, () => {
     if (cols.is_primary) run(db, 'UPDATE contacts SET is_primary = 0 WHERE prospect_id = ?', existing.prospect_id)

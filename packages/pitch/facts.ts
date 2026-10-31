@@ -116,7 +116,10 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
   let contact: Facts['contact'] = null
   const contacts = all<Contact>(db, 'SELECT * FROM contacts WHERE prospect_id = ? ORDER BY is_primary DESC, id', prospectId)
   if (options.channel === 'email') {
-    const chosen = options.contact_id ? contacts.find((c) => c.id === options.contact_id) : contacts.find((c) => c.email && c.verification_status === 'verified') ?? contacts.find((c) => c.email)
+    // Best tier first: a direct brand address, then a confirmed agency, then anything else with an email (which stays blocked).
+    const rank = (c: Contact) => (c.verification_status === 'failed' ? 9 : c.contact_tier === 'VERIFIED_DIRECT' ? 0 : c.contact_tier === 'VERIFIED_AGENCY' && c.agency_confirmed ? 1 : c.verification_status === 'verified' ? 2 : 3)
+    const withEmail = contacts.filter((c) => c.email).sort((a, b) => rank(a) - rank(b) || b.is_primary - a.is_primary)
+    const chosen = options.contact_id ? contacts.find((c) => c.id === options.contact_id) : withEmail[0]
     if (options.contact_id && !chosen) throw invalid('That contact does not belong to this company')
     if (chosen && !chosen.email) throw invalid('That contact has no email address; use the manual submission channel')
     if (chosen) {
@@ -176,6 +179,10 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
 
 // The best verified page for a manual submission: a contact form research found, else a creator/affiliate program page.
 export function suggestApplicationUrl(db: DB, prospectId: number): Facts['application'] {
+  // An official application portal found by contact research (linked from the brand's own program page) comes first.
+  const portal = get<{ contact_form_url: string; verified_at: string | null; last_checked_at: string | null; discovered_by: string }>(db,
+    "SELECT contact_form_url, verified_at, last_checked_at, discovered_by FROM contacts WHERE prospect_id = ? AND contact_tier = 'VERIFIED_PORTAL' AND contact_type = 'portal' AND verification_status != 'failed' ORDER BY id LIMIT 1", prospectId)
+  if (portal) return { url: portal.contact_form_url, retrievedAt: portal.last_checked_at, origin: portal.discovered_by === 'research' ? 'research' : 'manual' }
   const form = get<{ contact_form_url: string; updated_at: string; discovered_by: string }>(db,
     'SELECT contact_form_url, updated_at, discovered_by FROM contacts WHERE prospect_id = ? AND contact_form_url IS NOT NULL ORDER BY is_primary DESC, id LIMIT 1', prospectId)
   const program = get<{ url: string; retrieved_at: string }>(db, `SELECT url, retrieved_at FROM research_sources WHERE prospect_id = ? AND kind = 'sponsorship_evidence'

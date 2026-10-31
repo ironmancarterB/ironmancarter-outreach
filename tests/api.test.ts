@@ -66,7 +66,8 @@ describe('CRM endpoints', () => {
   it('creates a company with a contact and blocks a duplicate domain', async () => {
     const r = await post('/api/prospects', { company_name: 'Elgato', website: 'elgato.com', contact: { email: 'partners@elgato.com' }, tags: ['creator'] })
     expect(r.statusCode).toBe(201)
-    expect(r.json().contacts[0].eligibility.status).toBe('needs_review')
+    // Added without verification: a public contact that must be verified before it can ever be emailed.
+    expect(r.json().contacts[0]).toMatchObject({ contact_tier: 'PUBLIC_UNVERIFIED', eligibility: { status: 'ineligible' } })
     const dup = await post('/api/prospects', { company_name: 'Elgato Gaming', website: 'https://www.elgato.com' })
     expect(dup.statusCode).toBe(409)
     expect(dup.json().error.code).toBe('duplicate')

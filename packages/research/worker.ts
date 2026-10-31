@@ -4,6 +4,7 @@ import { get, getSetting, logActivity, nowIso, run, setSetting, tx, type DB } fr
 import type { RouterDeps } from '../ai/router'
 import { createFetcher, type Fetcher } from './fetcher'
 import { researchCandidate, type Candidate, type ResearchResult } from './pipeline'
+import { processContactRun, recoverContactRuns } from './contacts'
 
 export const MAX_ATTEMPTS = 3
 
@@ -84,12 +85,15 @@ export async function runWorker(db: DB, opts: WorkerOptions = {}) {
   const log = opts.log ?? (() => {})
   const recovered = recoverStale(db)
   if (recovered) log(`Recovered ${recovered} interrupted candidate(s)`)
+  const contactRuns = recoverContactRuns(db)
+  if (contactRuns) log(`Re-queued ${contactRuns} interrupted contact research run(s)`)
   const fetcher = createFetcher({ fetchImpl: opts.fetchImpl, delayMs: Math.max(1000, getSetting<number>(db, 'research.requestDelayMs')) })
   const idle = opts.idleMs ?? 3000
   const lane = async () => {
     while (!opts.signal?.aborted) {
       heartbeat(db)
-      const worked = await processOne(db, { fetcher, ai: opts.ai })
+      // New brands first, then "Find more contacts" runs.
+      const worked = (await processOne(db, { fetcher, ai: opts.ai })) || (await processContactRun(db, { fetcher }))
       if (!worked) await new Promise((r) => setTimeout(r, idle))
     }
   }

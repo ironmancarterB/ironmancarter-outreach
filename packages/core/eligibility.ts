@@ -12,6 +12,8 @@ export interface EligibilityInput {
     verification_status: 'unverified' | 'verified' | 'failed'
     verified_at: string | null
     jurisdiction: string
+    contact_tier?: string               // absent only in old callers; real contacts always have one
+    agency_confirmed?: string | null
   }
   prospect: { domain: string | null; stage: StageId }
   suppressedEmail: boolean
@@ -36,6 +38,11 @@ export function evaluateEligibility(input: EligibilityInput): EligibilityResult 
   if (input.suppressedDomain) blockers.push('Company domain is on the suppression list')
   if (OUTREACH_BLOCKING_STAGES.includes(prospect.stage)) blockers.push(`Company is in the "${prospect.stage.replace(/_/g, ' ')}" stage`)
   if (contact.verification_status === 'failed') blockers.push('Contact verification failed')
+  // Verification tiers: only direct brand addresses and confirmed agency addresses may ever be emailed.
+  const tier = contact.contact_tier
+  if (tier === 'PUBLIC_UNVERIFIED') blockers.push('Public contact that needs your manual verification before it can be emailed')
+  if (tier === 'VERIFIED_PORTAL') blockers.push('Application portal or contact form: submit it yourself on the brand\u2019s site')
+  if (tier === 'VERIFIED_AGENCY' && !contact.agency_confirmed) blockers.push('Agency contact not yet independently confirmed as representing the brand')
 
   if (!contact.source_url) review.push('No source URL showing where this contact was published')
   if (contact.verification_status === 'unverified') review.push('Contact has not been verified')
@@ -49,7 +56,8 @@ export function evaluateEligibility(input: EligibilityInput): EligibilityResult 
       ? 'Recipient jurisdiction is unknown'
       : `Jurisdiction ${contact.jurisdiction} requires manual review`)
   }
-  if (contact.email && prospect.domain && emailDomain(contact.email) !== prospect.domain) {
+  if (contact.email && prospect.domain && emailDomain(contact.email) !== prospect.domain && !(tier === 'VERIFIED_AGENCY' && contact.agency_confirmed)
+    && !(tier === 'VERIFIED_DIRECT')) {
     review.push('Email domain differs from the company domain (agency or third party?)')
   }
 

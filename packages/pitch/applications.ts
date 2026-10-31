@@ -41,7 +41,9 @@ export function updateApplication(db: DB, prospectId: number, input: { applicati
   if (input.application_url !== undefined) {
     const u = normalizeUrl(input.application_url)
     if (!u) throw invalid('Application URL must be a valid web address')
-    if (!p.domain || normalizeDomain(u) !== p.domain) throw invalid(`The application page must be on ${p.company_name}'s own site (${p.domain ?? 'no website on record'})`)
+    // On the brand's own site, or an official portal on record (an application platform linked from the brand's program page).
+    const portal = get(db, "SELECT 1 FROM contacts WHERE prospect_id = ? AND contact_tier = 'VERIFIED_PORTAL' AND contact_form_url = ? AND verification_status != 'failed'", prospectId, u)
+    if (!portal && (!p.domain || normalizeDomain(u) !== p.domain)) throw invalid(`The application page must be on ${p.company_name}'s own site (${p.domain ?? 'no website on record'}) or an official portal found in Contact Discovery`)
     // Pages research actually fetched count as verified; anything else is marked as added by you.
     const seen = get<{ retrieved_at: string }>(db, 'SELECT retrieved_at FROM research_sources WHERE prospect_id = ? AND url = ?', prospectId, u)
       ?? get<{ retrieved_at: string }>(db, 'SELECT fetched_at AS retrieved_at FROM research_fetches WHERE prospect_id = ? AND (url = ? OR final_url = ?) AND outcome = \'ok\'', prospectId, u, u)
