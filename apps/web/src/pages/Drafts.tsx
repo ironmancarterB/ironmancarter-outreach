@@ -3,6 +3,7 @@ import { Badge, Button, Card, Empty, ErrorBox, Input, Loading, Notice, PageHeade
 import { api, useApi } from '../lib/api'
 import { relative } from '../lib/format'
 import { navigate } from '../lib/router'
+import { GmailStatusBadge } from '../components/gmail'
 import type { Application, OutreachQueue, PitchSummary, PitchView, ProgramType } from '../lib/types'
 
 const TABS = [
@@ -29,9 +30,9 @@ export default function Drafts({ tab }: { tab?: string }) {
     <>
       <PageHeader title="Email Drafts" subtitle="Personalized pitches built from verified research. Draft mode only: nothing here can be sent." />
       <div className="mb-5">
-        <Notice tone="green" title="Drafts cannot be sent yet">
-          There is no send button and no sending code. Approved email pitches wait for Gmail (Phase 4) and the initial approval gate (Phase 5).
-          Manual submissions are always made by you on the brand's own site.
+        <Notice tone="green" title="Nothing here can be sent">
+          There is no send button and no sending code. Approved email pitches can become Gmail drafts (open a pitch → Gmail draft); approval is not
+          permission to send, and sending waits for Phase 5 and your explicit approval. Manual submissions are always made by you on the brand's own site.
         </Notice>
       </div>
       <Tabs tabs={TABS.map((t) => ({ ...t, label: counts[t.id] != null ? `${t.label} (${counts[t.id]})` : t.label }))} value={current} onChange={(t) => navigate(`/drafts/${t}`)} />
@@ -39,7 +40,7 @@ export default function Drafts({ tab }: { tab?: string }) {
         <>
           {current === 'ready' && <Ready data={data} onChange={reload} />}
           {current === 'drafts' && <PitchList items={data.drafts} empty="No drafts waiting. Draft one from “Ready to draft”." />}
-          {current === 'approved' && <PitchList items={data.approved} empty="Nothing approved yet." />}
+          {current === 'approved' && <PitchList items={data.approved} empty="Nothing approved yet." showGmail />}
           {current === 'rejected' && <PitchList items={data.rejected} empty="Nothing rejected." />}
           {current === 'manual' && <ManualSubmissions apps={apps.data} onChange={() => { apps.reload(); reload() }} />}
         </>
@@ -104,7 +105,7 @@ function Ready({ data, onChange }: { data: OutreachQueue; onChange: () => void }
   )
 }
 
-function PitchList({ items, empty }: { items: PitchSummary[]; empty: string }) {
+function PitchList({ items, empty, showGmail }: { items: PitchSummary[]; empty: string; showGmail?: boolean }) {
   if (!items.length) return <Empty title={empty} />
   return (
     <Card padded={false}>
@@ -122,7 +123,8 @@ function PitchList({ items, empty }: { items: PitchSummary[]; empty: string }) {
                 <div className="text-xs text-zinc-500">{p.channel === 'email' ? `To ${p.recipient_email ?? 'no recipient'}` : p.application_url} · {p.wordCount} words · {relative(p.updated_at)}</div>
                 {p.reject_reason && <div className="text-xs text-rose-600">Rejected: {p.reject_reason}</div>}
               </div>
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
+                {showGmail && p.channel === 'email' && <GmailStatusBadge draft={p.gmail} />}
                 {p.blockers > 0 && <Badge tone="red">{p.blockers} to fix</Badge>}
                 {p.warnings > 0 && <Badge tone="amber">{p.warnings} warning{p.warnings === 1 ? '' : 's'}</Badge>}
                 {p.blockers === 0 && p.warnings === 0 && <Badge tone="green">Checks pass</Badge>}

@@ -5,6 +5,7 @@ import { bytes, dateTime, relative } from '../lib/format'
 import { navigate } from '../lib/router'
 import type { Claim, ClaimSource, Package, PitchView, ProgramType, ProspectOutreach } from '../lib/types'
 import { PROGRAM_TONE } from './Drafts'
+import { GmailPanel } from '../components/gmail'
 
 const wordsIn = (body: string) => body.split(/\n(?:Best|Thanks|Cheers|Talk soon),?\s*\n/i)[0].split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length
 
@@ -69,7 +70,7 @@ export default function PitchEditor({ id }: { id: number }) {
       {p.status === 'superseded' && <Notice tone="amber">This is an older version. A newer one exists for this company.</Notice>}
       {p.status === 'rejected' && <Notice tone="red" title="Rejected">{p.reject_reason}</Notice>}
       {p.status === 'approved' && <Notice tone="green" title={`Approved ${p.reviewed_at ? relative(p.reviewed_at) : ''}`}>
-        {p.channel === 'email' ? 'Ready for the future approval gate. It will not be sent until Gmail is connected and you approve live sending.' : 'Ready for you to submit on the brand\'s site (Manual submissions tab).'}
+        {p.channel === 'email' ? 'You can now create a Gmail draft of it in the Gmail draft panel. Approval is not permission to send: nothing is sent until Phase 5 and your explicit approval of live sending.' : 'Ready for you to submit on the brand\'s site (Manual submissions tab).'}
       </Notice>}
 
       <div className="grid gap-5 xl:grid-cols-[1fr_26rem]">
@@ -98,10 +99,12 @@ export default function PitchEditor({ id }: { id: number }) {
               {p.generation_note && <p className="text-xs text-zinc-500">{p.generation_note}</p>}
             </div>
           </Card>
+          {data.gmail && <div className="xl:hidden"><GmailPanel view={data} onChange={setData} /></div>}
           <Evidence claims={p.claims} validation={data.claimValidation} />
         </div>
 
         <div className="space-y-5">
+          {data.gmail && <div className="hidden xl:block"><GmailPanel view={data} onChange={setData} /></div>}
           <Card title="Checks">
             {dirty && <p className="mb-2 text-xs text-amber-600">Showing checks for the saved version. Save to re-check your edits.</p>}
             {blockers.length === 0 && warnings.length === 0 && <p className="text-sm text-emerald-600">All checks pass.</p>}
@@ -175,7 +178,9 @@ function Attachment({ view }: { view: PitchView }) {
         <div className="text-xs text-zinc-500">Media kit v{a.version} · {bytes(a.sizeBytes)} · {a.checksumOk ? 'file verified (checksum matches)' : a.fileExists ? 'checksum mismatch' : 'file missing'}{!a.isCurrentDefault && ' · not the current default'}</div>
       </div>
       <a href={`/api/media-kits/${a.mediaKitId}/file`} target="_blank" rel="noreferrer" className="text-xs text-brand-600 hover:underline">Preview</a>
-      <Badge tone="amber">Gmail attachment not tested yet (Phase 4)</Badge>
+      {a.gmailAttachmentVerified
+        ? <Badge tone="green" title="A Gmail draft carrying this exact file was read back from Gmail and matched byte for byte">Verified in a Gmail draft</Badge>
+        : <Badge tone="amber" title="Create a Gmail draft (or the test draft in Settings → Gmail) to verify the attachment">Not yet verified in Gmail</Badge>}
     </div>
   )
 }

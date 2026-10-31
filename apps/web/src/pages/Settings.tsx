@@ -3,6 +3,7 @@ import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Notice, PageHeade
 import { api, useApi } from '../lib/api'
 import { dateTime, metricValue, usdAmount } from '../lib/format'
 import { navigate } from '../lib/router'
+import GmailSettings from './GmailSettings'
 import type { Activity, Category, Metric, Package } from '../lib/types'
 
 type SettingsData = { values: Record<string, unknown>; locked: Record<string, string>; editable: string[] }
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'analytics', label: 'Creator analytics' },
   { id: 'categories', label: 'Categories' },
   { id: 'packages', label: 'Packages & rates' },
+  { id: 'gmail', label: 'Gmail' },
   { id: 'ai', label: 'AI & costs' },
   { id: 'sending', label: 'Sending & compliance' },
   { id: 'suppression', label: 'Suppression list' },
@@ -32,6 +34,7 @@ export default function Settings({ tab }: { tab?: string }) {
           {current === 'analytics' && <Analytics />}
           {current === 'categories' && <Categories />}
           {current === 'packages' && <Packages />}
+          {current === 'gmail' && <GmailSettings />}
           {current === 'ai' && <AISettings s={settings.data} reload={settings.reload} />}
           {current === 'sending' && <Sending s={settings.data} reload={settings.reload} />}
           {current === 'suppression' && <Suppression />}
@@ -73,7 +76,7 @@ function Business({ s, reload }: { s: SettingsData; reload: () => void }) {
           <Field label="Creator name"><Input value={f.name} onChange={set('name')} /></Field>
           <Field label="Handle"><Input value={f.handle} onChange={set('handle')} /></Field>
           <Field label="Business email (shown in emails)"><Input type="email" value={f.email} onChange={set('email')} /></Field>
-          <Field label="Gmail account to connect (Phase 4)" hint="The app will refuse to connect any other Google account."><Input type="email" value={f.gmail} onChange={set('gmail')} /></Field>
+          <Field label="Gmail sending account" hint="The only Google account the app will connect. To move to a business-domain mailbox later, disconnect Gmail, change this, and connect the new account."><Input type="email" value={f.gmail} onChange={set('gmail')} /></Field>
           <Field label="Postal address for email footers" hint="Required by US CAN-SPAM in commercial email. A PO box or virtual mailbox works. Needed before live sending; not legal advice.">
             <Textarea className="min-h-16" value={f.address} onChange={set('address')} />
           </Field>

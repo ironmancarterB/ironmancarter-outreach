@@ -24,7 +24,7 @@ export default function Overview() {
         <Stat label="Remaining capacity" value={`${o.remainingToday} today`} hint={o.autopilotEnabled ? `${o.remainingThisWeek} this week` : 'Zero while autopilot is off'} />
         <Stat label="Verified prospects available" value={p.verifiedAvailable}
           hint={<><a className="text-brand-600 hover:underline" href="#/discovery/review">{p.pendingReview} awaiting your review</a> · {p.needsReview} contacts need review · {p.manualContactQueue} form only</>} />
-        <Stat label="Replies needing attention" value={data.repliesNeedingAttention} hint="Reply monitoring arrives in Phase 4" />
+        <Stat label="Replies needing attention" value={data.repliesNeedingAttention} hint="Reply monitoring arrives in Phase 5" />
         <Stat label="Follow-ups scheduled" value={p.followUpsScheduled} hint="Manual reminders for now" />
         <Stat label="Active negotiations" value={p.activeNegotiations} hint="Replied, negotiating or proposal sent" />
       </div>

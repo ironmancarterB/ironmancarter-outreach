@@ -182,7 +182,8 @@ export function rejectPitch(db: DB, pitchId: number, reason: string) {
   })
 }
 
-// What the future Gmail integration will attach. Verified against the stored file; not yet tested with Gmail.
+// The media kit a Gmail draft of this pitch carries, verified against the stored file. gmailAttachmentVerified
+// is true once a Gmail draft with this exact file was read back from Gmail and matched byte for byte.
 export function attachmentReference(db: DB, dataDir: string, mediaKitId: number | null) {
   if (!mediaKitId) return null
   const kit = get<MediaKit>(db, 'SELECT * FROM media_kits WHERE id = ?', mediaKitId)
@@ -193,7 +194,8 @@ export function attachmentReference(db: DB, dataDir: string, mediaKitId: number 
   return {
     mediaKitId: kit.id, version: kit.version, label: kit.label, filename: kit.original_filename, mimeType: 'application/pdf',
     sizeBytes: kit.size_bytes, sha256: kit.sha256, storedFile: `data/media-kit/${kit.stored_filename}`,
-    fileExists: exists, checksumOk, isCurrentDefault: !!kit.is_default, gmailAttachmentTested: false,
+    fileExists: exists, checksumOk, isCurrentDefault: !!kit.is_default,
+    gmailAttachmentVerified: !!get(db, 'SELECT 1 FROM gmail_drafts WHERE attachment_sha256 = ? AND attachment_verified_at IS NOT NULL', kit.sha256),
   }
 }
 

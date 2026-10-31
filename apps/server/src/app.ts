@@ -31,6 +31,14 @@ import { addSuppression, listSuppressions, removeSuppression } from '../../../pa
 import {
   getMediaKit, importMediaKit, listMediaKits, MAX_MEDIA_KIT_BYTES, mediaKitFilePath, setDefaultMediaKit, updateMediaKit,
 } from '../../../packages/mediakit/store'
+import { activeAccount, connectionStatus, disconnect, finishConnect, removeClient, saveClient, startConnect, type GmailDeps } from '../../../packages/gmail/account'
+import {
+  checkUncertain, createPitchDraft, createTestDraft, getDraftRow, gmailForPitch, listDraftRows, listOperations, markNotCreated,
+  recoverInterrupted, syncDrafts, unlinkDraft, updatePitchDraft, verifyDraft,
+} from '../../../packages/gmail/drafts'
+import { GoogleApi } from '../../../packages/gmail/google'
+import { defaultSecretStore, memoryStore } from '../../../packages/gmail/secrets'
+import { config } from './config'
 import { LOCKED, VALIDATORS, validateSetting } from './settingsPolicy'
 
 export interface AppOptions {
@@ -39,6 +47,8 @@ export interface AppOptions {
   webDist?: string                // serve the built dashboard (production)
   fetchImpl?: typeof fetch        // injectable for tests
   aiDeps?: RouterDeps             // injectable for tests
+  gmail?: Partial<GmailDeps>      // injectable for tests (fake Google API, in-memory secrets)
+  dashboardUrl?: string
   logger?: boolean
 }
 
@@ -51,9 +61,30 @@ const id = (v: unknown) => {
 }
 type Body = Record<string, unknown>
 
+// Actions that create something in Gmail or stop tracking it need an explicit confirmation from the dashboard.
+const confirmed = (body: unknown) => {
+  if ((body as Body | undefined)?.confirm !== true) throw invalid('Confirm this action first')
+}
+
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+const callbackPage = (ok: boolean, message: string, dashboardUrl: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Gmail ${ok ? 'connected' : 'not connected'}</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#18181b;background:#fafafa}
+@media (prefers-color-scheme:dark){body{color:#f4f4f5;background:#09090b}}a{color:#4f46e5}</style></head>
+<body><h1>${ok ? 'Gmail connected' : 'Gmail was not connected'}</h1><p>${esc(message)}</p>
+<p><a href="${esc(dashboardUrl)}/#/settings/gmail">Back to the dashboard</a>. You can close this tab.</p></body></html>`
+
 export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   const { db, dataDir } = opts
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 })
+  const gmail: GmailDeps = {
+    api: opts.gmail?.api ?? new GoogleApi(),
+    // Tests never touch the real Keychain.
+    secrets: opts.gmail?.secrets ?? (process.env.VITEST ? memoryStore() : defaultSecretStore(dataDir)),
+    redirectUri: opts.gmail?.redirectUri ?? `http://127.0.0.1:${config.port}/api/gmail/oauth/callback`,
+  }
+  const dashboardUrl = opts.dashboardUrl ?? `http://localhost:${config.production ? config.port : config.webPort}`
+  recoverInterrupted(db)
   await app.register(multipart, { limits: { fileSize: MAX_MEDIA_KIT_BYTES + 1, files: 1, fields: 10 } })
 
   // Local-only guard. Rejects requests addressed to another host name (DNS rebinding) and requires a
@@ -93,6 +124,12 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.patch('/api/settings', async (req) => {
     const body = (req.body ?? {}) as Body
     const clean = Object.entries(body).map(([k, v]) => [k, validateSetting(k, v)] as const)
+    const account = activeAccount(db)
+    for (const [k, v] of clean) {
+      if (k === 'gmail.expectedAccount' && account && v !== account.email) {
+        throw new AppError(409, 'connected', `Disconnect ${account.email} (Settings → Gmail) before changing the sending account.`)
+      }
+    }
     for (const [k, v] of clean) setSetting(db, k, v)
     if (clean.length) logActivity(db, 'settings.updated', `Updated settings: ${clean.map(([k]) => k).join(', ')}`)
     return { values: allSettings(db) }
@@ -222,7 +259,10 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   })
 
   // ---------- Pitches (draft mode: there is no send endpoint) ----------
-  app.get('/api/outreach/queue', async () => outreachQueue(db))
+  app.get('/api/outreach/queue', async () => {
+    const q = outreachQueue(db)
+    return { ...q, approved: q.approved.map((x) => ({ ...x, gmail: x.channel === 'email' ? gmailForPitch(db, dataDir, x.id)?.draft ?? null : null })) }
+  })
   app.get('/api/prospects/:id/outreach', async (req) => {
     const pid = id((req.params as Body).id)
     const facts = gatherFacts(db, pid, { channel: 'email' })
@@ -248,7 +288,8 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     setProgramTypeOverride(db, id((req.params as Body).id), typeof v === 'string' ? v : null)
     return { ok: true }
   })
-  app.get('/api/pitches/:id', async (req) => pitchView(db, dataDir, id((req.params as Body).id)))
+  const pitchWithGmail = (pid: number) => ({ ...pitchView(db, dataDir, pid), gmail: gmailForPitch(db, dataDir, pid) })
+  app.get('/api/pitches/:id', async (req) => pitchWithGmail(id((req.params as Body).id)))
   app.patch('/api/pitches/:id', async (req) => {
     const b = (req.body ?? {}) as Body
     const p = updatePitch(db, id((req.params as Body).id), { subject: b.subject as string | undefined, body: b.body as string | undefined })
@@ -384,6 +425,70 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     if (!prompt) throw invalid('Enter a prompt')
     if (prompt.length > 4000) throw invalid('Prompt is too long for a test (max 4,000 characters)')
     return runAI(db, { purpose: 'test', prompt, maxOutputTokens: 300 }, opts.aiDeps)
+  })
+
+  // ---------- Gmail (drafts only; nothing here sends) ----------
+  app.get('/api/gmail/status', async () => ({
+    ...(await connectionStatus(db, gmail)),
+    drafts: Object.fromEntries(all<{ status: string; n: number }>(db, 'SELECT status, count(*) AS n FROM gmail_drafts GROUP BY status').map((r) => [r.status, r.n])),
+    lastSyncAt: get<{ t: string | null }>(db, 'SELECT max(last_synced_at) AS t FROM gmail_drafts')?.t ?? null,
+  }))
+  app.put('/api/gmail/client', async (req) => {
+    await saveClient(db, gmail, (req.body ?? {}) as Body)
+    return connectionStatus(db, gmail)
+  })
+  app.delete('/api/gmail/client', async () => {
+    await removeClient(db, gmail)
+    return connectionStatus(db, gmail)
+  })
+  app.post('/api/gmail/connect', async () => startConnect(db, gmail))
+  // Google sends the browser here after the consent screen. Protected by the single-use state value and PKCE.
+  app.get('/api/gmail/oauth/callback', async (req, reply) => {
+    reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store')
+    try {
+      const { email } = await finishConnect(db, gmail, (req.query ?? {}) as Body)
+      return callbackPage(true, `Connected ${email}. The app can create and update drafts only; sending stays disabled.`, dashboardUrl)
+    } catch (err) {
+      reply.code(err instanceof AppError ? err.status : 500)
+      return callbackPage(false, err instanceof AppError ? err.message : 'Something went wrong. Details are in the server log.', dashboardUrl)
+    }
+  })
+  app.post('/api/gmail/disconnect', async (req) => {
+    confirmed(req.body)
+    return disconnect(db, gmail)
+  })
+  app.post('/api/gmail/test-draft', async (req) => {
+    confirmed(req.body)
+    const row = await createTestDraft(db, gmail, dataDir)
+    return listDraftRows(db).find((r) => r.id === row.id)
+  })
+  app.get('/api/gmail/drafts', async () => listDraftRows(db))
+  app.get('/api/gmail/operations', async () => listOperations(db, 200))
+  app.post('/api/gmail/sync', async () => syncDrafts(db, gmail))
+  app.post('/api/gmail/drafts/:id/check', async (req) => checkUncertain(db, gmail, id((req.params as Body).id)))
+  app.post('/api/gmail/drafts/:id/verify', async (req) => {
+    const row = getDraftRow(db, id((req.params as Body).id))
+    return (await verifyDraft(db, gmail, row.id)) ?? { ok: false, checks: [], note: getDraftRow(db, row.id).sync_note }
+  })
+  app.post('/api/gmail/drafts/:id/not-created', async (req) => {
+    confirmed(req.body)
+    return markNotCreated(db, id((req.params as Body).id))
+  })
+  app.post('/api/gmail/drafts/:id/unlink', async (req) => {
+    confirmed(req.body)
+    return unlinkDraft(db, id((req.params as Body).id))
+  })
+  app.post('/api/pitches/:id/gmail-draft', async (req, reply) => {
+    confirmed(req.body)
+    const pid = id((req.params as Body).id)
+    await createPitchDraft(db, gmail, dataDir, pid)
+    return reply.code(201).send(pitchWithGmail(pid))
+  })
+  app.put('/api/pitches/:id/gmail-draft', async (req) => {
+    confirmed(req.body)
+    const pid = id((req.params as Body).id)
+    await updatePitchDraft(db, gmail, dataDir, pid, { overwriteGmailEdits: ((req.body ?? {}) as Body).overwriteGmailEdits === true })
+    return pitchWithGmail(pid)
   })
 
   // ---------- Dashboard (production build) ----------

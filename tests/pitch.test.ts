@@ -352,7 +352,7 @@ describe('media kit attachment reference', () => {
     const pitch = await generatePitch(db, p.id, { channel: 'email' })
     expect(pitch.media_kit_id).toBe(kit.id)
     expect(attachmentReference(db, dir, pitch.media_kit_id)).toMatchObject({
-      version: 1, filename: 'Content Media Kit Final.pdf', mimeType: 'application/pdf', fileExists: true, checksumOk: true, isCurrentDefault: true, gmailAttachmentTested: false,
+      version: 1, filename: 'Content Media Kit Final.pdf', mimeType: 'application/pdf', fileExists: true, checksumOk: true, isCurrentDefault: true, gmailAttachmentVerified: false,
     })
   })
 })
@@ -378,7 +378,13 @@ describe('drafts cannot be sent', () => {
     }
     walk(join(root, 'apps'))
     walk(join(root, 'packages'))
-    const offenders = files.filter((f) => /nodemailer|smtp|gmail\.googleapis|messages\/send|users\.messages\.send|sendMail\(/i.test(readFileSync(f, 'utf8')))
+    // Phase 4 talks to the Gmail API, but only to its draft and profile endpoints; no send endpoint appears anywhere.
+    const offenders = files.filter((f) => /nodemailer|smtp|messages\/send|drafts\/send|users\.(messages|drafts)\.send|sendMail\(|\/send['"`?]/i.test(readFileSync(f, 'utf8')))
     expect(offenders).toEqual([])
+    const gmailFiles = files.filter((f) => /gmail\.googleapis/.test(readFileSync(f, 'utf8')))
+    expect(gmailFiles.map((f) => f.slice(root.length))).toEqual(['/packages/gmail/google.ts'])
+    const google = readFileSync(join(root, 'packages/gmail/google.ts'), 'utf8')
+    const paths = new Set([...google.matchAll(/\$\{GMAIL_(?:API|UPLOAD)\}\/([a-z]+)/g)].map((m) => m[1]))
+    expect([...paths].sort()).toEqual(['drafts', 'profile'])
   })
 })

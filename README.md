@@ -3,8 +3,8 @@
 A local-first command center for researching sponsors, managing the sponsorship CRM and (in later phases)
 sending approved outreach through Gmail. It runs entirely on this Mac.
 
-**Current phase: 3 (Pitches & approval).** This build contains **no email-sending code**, no Gmail connection and
-no paid AI. Autopilot, live sending, sending tiers and paid AI are locked. All outreach is in draft mode.
+**Current phase: 4 (Gmail drafts).** The app can connect your Gmail account and turn approved pitches into **Gmail
+drafts**. It contains **no email-sending code** and no paid AI. Autopilot, live sending, sending tiers and paid AI are locked.
 
 ## Launch it
 
@@ -101,8 +101,64 @@ Manual submissions: the app stores the verified creator portal / form URL (pages
 add must be on the brand's own domain), drafts a tailored message, and tracks status and follow-up dates. **You** open the page
 and submit; "I submitted it" records it and sets a one-week follow-up. Forms are never filled in or submitted automatically.
 
-The email attachment is a reference to the default media kit version (file and checksum verified). Attaching it through Gmail
-is **not yet tested**; that is Phase 4.
+The email attachment is the default media kit version (file and checksum verified). Phase 4 attaches it to Gmail drafts.
+
+## Gmail drafts (Phase 4)
+
+Approved email pitches can become drafts in your Gmail **Drafts** folder, with the default media kit attached. The app cannot
+send them: it has no send code, the Gmail client refuses any send endpoint, and approving a pitch is not permission to send.
+
+### One-time setup (free; about 10 minutes)
+
+Google requires every app that uses the Gmail API to have its own OAuth client. It costs nothing and needs no billing account.
+
+1. Open https://console.cloud.google.com/projectcreate signed in as `ironmancarterbusiness@gmail.com` and create a project.
+2. **APIs & Services → Library → Gmail API → Enable.**
+3. **Google Auth Platform → Get started** (the OAuth consent screen): app name, support email, audience **External**, contact email.
+4. **Audience → Test users → Add** `ironmancarterbusiness@gmail.com`.
+5. **Data access → Add or remove scopes →** `https://www.googleapis.com/auth/gmail.compose` (only this one).
+6. **Clients → Create client → Desktop app → Create → Download JSON.**
+7. In the app: **Settings → Gmail**, paste the JSON, **Save OAuth client**, then **Connect**. Sign in on Google's page, approve, and the
+   page confirms the connection. Google may warn that the app is unverified; that is expected for your own private app.
+
+### How it works
+
+- **Sign-in:** Google's OAuth for installed apps (loopback redirect to `127.0.0.1:5181`, PKCE, single-use state). You type your
+  password only on Google's own page; the app never sees it.
+- **Permission:** only `gmail.compose`, the narrowest scope that can create drafts (Google documents `drafts.create` as needing
+  `mail.google.com`, `gmail.modify` or `gmail.compose`). Google's own description of it is "Manage drafts and send emails". The app
+  uses it only for drafts and the account address. Connections that grant anything else are discarded and revoked.
+- **Only one account:** the app refuses any account other than **Settings → Business → Gmail sending account** and revokes its access.
+  To move to a business-domain mailbox later: disconnect, change that setting, connect the new account.
+- **Secrets:** the OAuth client and refresh token are stored in the **macOS Keychain** (service "IronmanCarter Outreach"), never in the
+  database, `.env`, the project folder or Git. Access tokens live in memory only. **Disconnect** revokes access at Google and deletes the token.
+- **Creating a draft:** Email Drafts → open an approved email pitch → **Create Gmail draft** (with a confirmation). The app re-runs every
+  pitch check, confirms the recipient isn't suppressed, and confirms the media kit file still matches its recorded SHA-256.
+- **Verification:** after creating a draft, the app reads it back from Gmail in raw form and checks the recipient, subject, sender, body and
+  the attachment's file name, size and SHA-256 against media kit v1. The result is shown on the pitch.
+- **Duplicates:** one live Gmail draft per pitch and per company (database-enforced). A regenerated pitch updates the existing draft
+  (same Gmail draft ID) instead of creating another. If you changed the draft in Gmail, updating needs your explicit go-ahead.
+- **Lost responses are never retried:** if Google doesn't answer (timeout, network or server error), or the app stops mid-request, the draft is
+  marked **status uncertain**. **Check Gmail** searches your drafts for the draft's unique reference, which the app writes into the
+  message's MIME boundary (Gmail replaces any Message-ID an app sets, but keeps the boundary). If it isn't found, only you can mark it
+  "not created", which allows a new attempt. After creation the app records the Message-ID Gmail assigned, for matching replies later.
+- **Sync with Gmail** checks that each draft still exists and whether you changed it in Gmail. A draft that disappeared was sent or deleted by
+  you in Gmail; telling those apart requires read access to Sent Mail (Phase 5).
+- **Audit trail:** every Gmail API call is logged (Settings → Gmail → activity), and every draft event goes to the audit log.
+- **Test draft:** Settings → Gmail → **Create test draft to myself** makes one draft ("TEST - IronmanCarter Sponsorship Outreach") addressed
+  to your own account, with the media kit, so you can test without involving any brand. Verified live on 2026-10-31.
+- **Later phases:** `email_threads`, `email_messages` and `follow_ups` tables are in place; the draft's Gmail thread is recorded now so
+  replies and follow-ups can be matched later.
+
+### Limitations
+
+- **Weekly reconnect in Testing mode.** Google expires refresh tokens after 7 days for apps whose consent screen is in "Testing" status. The app
+  then shows "Reconnect needed". Publishing the app to "In production" removes the 7-day limit but shows an "unverified app" warning on sign-in
+  (allowed for personal use; full verification of this restricted scope requires a paid security assessment and is not needed here).
+- **No reply detection yet.** Reading replies and Sent Mail needs a read scope (`gmail.readonly` or `gmail.metadata`), which will be requested
+  in Phase 5 with your approval.
+- **Gmail API quota** is free and far above what this app uses.
+- **Open in Gmail** uses Gmail's `#drafts?compose=<message id>` web link with your account selected.
 
 ## Where things live
 
@@ -118,9 +174,10 @@ is **not yet tested**; that is Phase 4.
 | `packages/research/` | Polite fetcher + robots.txt, page extraction, evidence detection, scoring, research pipeline, batches, durable worker queue. |
 | `apps/worker/` | The research worker process (`npm run worker`). Safe to stop any time; interrupted work resumes. |
 | `packages/pitch/` | Fact gathering, program classification, template writer, local-AI writer, checks, evidence validation, approvals, manual applications, packages. |
+| `packages/gmail/` | Google OAuth + draft-only Gmail client (`google.ts`), Keychain secret storage, MIME builder/parser, connection and draft services. |
 | `scripts/` | Command-line import, migrations, and the one-off media kit email fix. |
 | `tests/` | Vitest suites. |
-| `data/` | **Git-ignored.** `outreach.db`, media kit versions, and `media-kit/originals/` (your untouched original PDF plus the corrected copy). |
+| `data/` | **Git-ignored.** `outreach.db`, media kit versions, and `media-kit/originals/` (your untouched original PDF plus the corrected copy). Gmail tokens are not here; they are in the macOS Keychain. |
 
 ## Media kit
 

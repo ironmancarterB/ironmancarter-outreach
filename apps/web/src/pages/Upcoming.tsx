@@ -33,8 +33,8 @@ export function ReplyInbox() {
     <>
       <PageHeader title="Reply Inbox" subtitle="Replies to outreach threads, classified for you." />
       <div className="space-y-4">
-        <PhaseNote phase="Phase 4">After Gmail is connected (read-only plus drafts), replies are matched to outreach threads and classified: interested, wants pricing, wants media kit, wants a meeting, needs info, not interested, opt-out, out-of-office or unclear. Suggested replies always wait for your approval.</PhaseNote>
-        <Empty title="No replies">Gmail is not connected.</Empty>
+        <PhaseNote phase="Phase 5">Reply detection needs read access to Gmail, which is requested separately with your approval (Phase 4 connects drafts only). Then replies are matched to outreach threads and classified: interested, wants pricing, wants media kit, wants a meeting, needs info, not interested, opt-out, out-of-office or unclear. Suggested replies always wait for your approval.</PhaseNote>
+        <Empty title="No replies">Reply monitoring is not enabled yet.</Empty>
       </div>
     </>
   )

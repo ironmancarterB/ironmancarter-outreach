@@ -172,16 +172,18 @@ export interface PitchView {
   claimValidation: { sentence: string; kind: string; inBody: boolean; problems: string[] }[]
   attachment: {
     mediaKitId: number; version: number; label: string; filename: string; mimeType: string; sizeBytes: number; sha256: string; storedFile: string
-    fileExists: boolean; checksumOk: boolean; isCurrentDefault: boolean; gmailAttachmentTested: false
+    fileExists: boolean; checksumOk: boolean; isCurrentDefault: boolean; gmailAttachmentVerified: boolean
   } | { mediaKitId: number; missing: true } | null
   versions: { id: number; version: number; channel: string; status: string; generator: string; created_at: string }[]
   sendingAvailable: false
+  gmail: PitchGmail | null
 }
 
 export interface PitchSummary {
   id: number; prospect_id: number; company_name: string; fit_score: number | null; version: number; channel: 'email' | 'manual_form'
   recipient_email: string | null; application_url: string | null; subject: string | null; status: string; generator: string; edited: boolean
   updated_at: string; reject_reason: string | null; wordCount: number; blockers: number; warnings: number
+  gmail?: GmailDraftView | null
 }
 
 export interface OutreachQueue {
@@ -300,4 +302,44 @@ export interface Overview {
   ai: { provider: string; paidEnabled: boolean; budgetUsd: number; paidSpendThisMonthUsd: number }
   categories: { id: number; name: string; enabled: number; prospects: number }[]
   recentActivity: Activity[]
+}
+
+export interface GmailVerification {
+  ok: boolean
+  checkedAt: string
+  checks: { label: string; ok: boolean; detail: string }[]
+}
+
+export interface GmailDraftView {
+  id: number; kind: 'pitch' | 'test'; status: 'creating' | 'created' | 'uncertain' | 'failed' | 'gone' | 'unlinked'; pitchId: number | null
+  recipient: string; subject: string | null; gmailDraftId: string | null; threadId: string | null; openUrl: string | null
+  attachment: { filename: string | null; sha256: string | null; mediaKitId: number | null }
+  verification: GmailVerification | null; editedInGmail: boolean; outOfDate: boolean
+  lastSyncedAt: string | null; note: string | null; error: string | null; createdAt: string; updatedAt: string
+  companyName?: string | null; prospectId?: number | null
+}
+
+export interface PitchGmail {
+  connected: boolean
+  account: string | null
+  draft: GmailDraftView | null
+  history: { id: number; status: string; created_at: string }[]
+}
+
+export interface GmailStatus {
+  expectedAccount: string
+  clientConfigured: boolean
+  clientId: string | null
+  secretStorage: string
+  redirectUri: string
+  requestedScopes: string[]
+  account: { email: string; status: 'connected' | 'needs_reconnect'; scopes: string[]; connectedAt: string; lastCheckedAt: string | null; lastError: string | null } | null
+  sendingEnabled: false
+  drafts: Record<string, number>
+  lastSyncAt: string | null
+}
+
+export interface GmailOperation {
+  id: number; account_id: number | null; draft_row_id: number | null; operation: string; status: 'started' | 'ok' | 'failed' | 'uncertain'
+  http_status: number | null; detail: string | null; started_at: string; finished_at: string | null
 }
