@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+
+# Local data: database, media kit files, logs. Never committed.
+data/
+
+# Secrets
+.env
+.env.*
+!.env.example

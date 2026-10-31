@@ -1,0 +1,42 @@
+{
+  "name": "ironmancarter-outreach",
+  "private": true,
+  "version": "0.1.0",
+  "description": "IronmanCarter sponsorship outreach command center (local-first).",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch apps/server/src/index.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx apps/server/src/index.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "media-kit:import": "tsx scripts/import-media-kit.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/multipart": "10.1.4",
+    "@fastify/static": "10.1.6",
+    "fastify": "5.12.7",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "10.0.6",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}

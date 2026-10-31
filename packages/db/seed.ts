@@ -1,0 +1,123 @@
+// Default rows inserted on first run. INSERT OR IGNORE keeps any later edits made in the app.
+import { nowIso, run, tx, type DB } from './sql'
+
+export const BUSINESS_EMAIL = 'ironmancarterbusiness@gmail.com'
+
+export const DEFAULT_SETTINGS: Record<string, unknown> = {
+  'business.creatorName': 'IronmanCarter',
+  'business.handle': 'ironmancarterttv',
+  'business.email': BUSINESS_EMAIL,
+  // Required in the footer of commercial email (CAN-SPAM) before live sending can be enabled.
+  'business.postalAddress': '',
+  'business.revenueGoalMonthlyUsd': 30000,
+  'business.sponsorshipMilestonesUsd': [1000, 3000, 5000, 10000],
+
+  // Outreach is locked down by default. Phase 1 has no sending code at all.
+  'outreach.mode': 'research_only',
+  'outreach.autopilotEnabled': false,
+  'outreach.liveSendingEnabled': false,
+  'outreach.sendingTier': 'testing',
+  'outreach.businessHours': { timezone: 'America/Los_Angeles', start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
+  'outreach.followUps': { enabled: false, firstAfterBusinessDays: 5, secondAfterBusinessDays: 12, max: 2 },
+  'outreach.researchFreshnessDays': 90,
+  'outreach.autoEligibleJurisdictions': ['US'],
+
+  'gmail.expectedAccount': BUSINESS_EMAIL,
+
+  // $0 by default: mock provider, paid AI off, zero budget, no automatic fallback.
+  'ai.provider': 'mock',
+  'ai.paidEnabled': false,
+  'ai.monthlyBudgetUsd': 0,
+  'ai.ollama': { baseUrl: 'http://127.0.0.1:11434', model: 'gemma4:12b' },
+  'ai.anthropic': { routineModel: 'claude-haiku-5-5', premiumModel: 'claude-sonnet-5-5' },
+  'ai.cacheTtlDays': 30,
+}
+
+export const CATEGORIES = [
+  { slug: 'gaming-peripherals', name: 'Gaming Peripherals', description: 'Mice, keyboards, headsets, controllers, monitors, chairs, mousepads and accessories.' },
+  { slug: 'pc-hardware', name: 'PC Hardware', description: 'Gaming PCs, GPUs, CPUs, components, cooling, storage, memory.' },
+  { slug: 'gaming-software', name: 'Gaming Software', description: 'Companion apps, game analytics, streaming utilities and gaming tools.' },
+  { slug: 'ai-tools', name: 'AI Tools and Applications', description: 'AI assistants, video and image generators, creative AI and AI productivity software.' },
+  { slug: 'creator-software', name: 'Creator Software', description: 'Video editing, streaming software, thumbnails, creator analytics and automation.' },
+  { slug: 'productivity-tech', name: 'Productivity and Technology', description: 'Productivity software, tech accessories, utilities, digital services and subscriptions.' },
+  {
+    slug: 'energy-drinks', name: 'Energy Drinks and Gaming Beverages',
+    description: 'Energy drinks, gaming beverages, sports drinks and hydration brands with documented creator or esports programs.',
+    compliance_note: 'Age-appropriate partnerships only. No campaigns aimed at minors and no unsupported health or performance claims.',
+  },
+  {
+    slug: 'vpn-privacy', name: 'VPN and Digital Privacy', description: 'VPN providers, privacy software, cybersecurity and internet protection.',
+    compliance_note: 'No unsupported claims about anonymity, privacy guarantees or security.',
+  },
+]
+
+export const SENDING_TIERS = [
+  { slug: 'testing', name: 'Testing', daily: 5, weekly: 25 },
+  { slug: 'initial_launch', name: 'Initial Launch', daily: 15, weekly: 75 },
+  { slug: 'expansion', name: 'Expansion', daily: 25, weekly: 125 },
+  { slug: 'established', name: 'Established', daily: 40, weekly: 200 },
+]
+
+type Metric = {
+  platform: string; key: string; label: string; value: number; unit?: string; approx?: boolean
+  period?: string; start?: string; end?: string; asOf: string; source: string; notes?: string
+}
+
+const KIT = 'Media kit (2026)'
+const BRIEF = 'October 2026 analytics brief'
+const KIT_PERIOD = { start: '2026-08-01', end: '2026-10-29' }
+
+// Figures supplied by IronmanCarter. Never invent or adjust these; edit them in Settings → Creator analytics.
+export const CREATOR_METRICS: Metric[] = [
+  { platform: 'instagram', key: 'followers', label: 'Followers', value: 6575, asOf: '2026-10-29', source: KIT, notes: 'The October brief listed approximately 6,522 at an earlier date.' },
+  { platform: 'instagram', key: 'views_90d', label: 'Views', value: 7933413, period: '90 days', ...KIT_PERIOD, asOf: '2026-10-29', source: KIT },
+  { platform: 'instagram', key: 'views_30d', label: 'Views', value: 2906664, period: '30 days', asOf: '2026-10-29', source: BRIEF },
+  { platform: 'instagram', key: 'interactions_90d', label: 'Interactions', value: 537095, approx: true, period: '90 days', ...KIT_PERIOD, asOf: '2026-10-29', source: KIT },
+  { platform: 'instagram', key: 'net_followers_90d', label: 'Net follower growth', value: 1507, period: '90 days', ...KIT_PERIOD, asOf: '2026-10-29', source: KIT },
+  { platform: 'instagram', key: 'non_follower_views_90d', label: 'Views from non-followers', value: 98.5, unit: 'percent', period: '90 days', ...KIT_PERIOD, asOf: '2026-10-29', source: KIT },
+  { platform: 'instagram', key: 'audience_18_34', label: 'Audience ages 18–34', value: 84.7, unit: 'percent', asOf: '2026-10-29', source: KIT },
+  { platform: 'instagram', key: 'audience_male', label: 'Male audience', value: 88.7, unit: 'percent', asOf: '2026-10-29', source: KIT },
+  { platform: 'instagram', key: 'audience_us', label: 'United States audience', value: 18.9, unit: 'percent', asOf: '2026-10', source: BRIEF },
+  { platform: 'youtube', key: 'subscribers', label: 'Subscribers', value: 2078, approx: true, asOf: '2026-10-29', source: KIT },
+  { platform: 'youtube', key: 'views_90d', label: 'Views', value: 4188116, period: '90 days', ...KIT_PERIOD, asOf: '2026-10-29', source: KIT },
+  { platform: 'youtube', key: 'views_28d', label: 'Views', value: 1602221, period: '28 days', asOf: '2026-10-29', source: BRIEF },
+  { platform: 'youtube', key: 'watch_hours_90d', label: 'Watch hours', value: 17900, unit: 'hours', approx: true, period: '90 days', asOf: '2026-10', source: BRIEF },
+  { platform: 'youtube', key: 'audience_18_34', label: 'Audience ages 18–34', value: 81.8, unit: 'percent', asOf: '2026-10-29', source: KIT },
+  { platform: 'youtube', key: 'audience_male', label: 'Male audience', value: 95.9, unit: 'percent', asOf: '2026-10-29', source: KIT },
+  { platform: 'tiktok', key: 'followers', label: 'Followers', value: 4370, approx: true, asOf: '2026-10-29', source: KIT },
+  { platform: 'tiktok', key: 'post_views_60d', label: 'Post views', value: 476900, approx: true, period: '60 days', asOf: '2026-10', source: BRIEF },
+  { platform: 'tiktok', key: 'likes_60d', label: 'Likes', value: 30800, approx: true, period: '60 days', asOf: '2026-10', source: BRIEF },
+  { platform: 'tiktok', key: 'shares_60d', label: 'Shares', value: 6900, approx: true, period: '60 days', asOf: '2026-10', source: BRIEF },
+  { platform: 'tiktok', key: 'audience_male', label: 'Male audience', value: 80, unit: 'percent', approx: true, asOf: '2026-10', source: BRIEF },
+  { platform: 'twitch', key: 'followers', label: 'Followers', value: 1223, approx: true, asOf: '2026-10-29', source: KIT },
+  { platform: 'twitch', key: 'avg_viewers_30d', label: 'Average concurrent viewers', value: 6.6, unit: 'average', period: '30 days', asOf: '2026-10', source: BRIEF },
+  { platform: 'twitch', key: 'hours_streamed_30d', label: 'Hours streamed', value: 69, unit: 'hours', approx: true, period: '30 days', asOf: '2026-10', source: BRIEF },
+  {
+    platform: 'combined', key: 'ig_yt_views_90d', label: 'Instagram + YouTube views', value: 12121529, period: '90 days', ...KIT_PERIOD,
+    asOf: '2026-10-29', source: KIT, notes: 'Sum of platform-reported views. Not deduplicated unique viewers.',
+  },
+]
+
+export function seed(db: DB) {
+  const now = nowIso()
+  tx(db, () => {
+    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+      run(db, 'INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(value), now)
+    }
+    CATEGORIES.forEach((c, i) => {
+      run(db, `INSERT OR IGNORE INTO categories (slug, name, description, compliance_note, sort_order) VALUES (?, ?, ?, ?, ?)`,
+        c.slug, c.name, c.description, c.compliance_note ?? null, i + 1)
+    })
+    SENDING_TIERS.forEach((t, i) => {
+      run(db, 'INSERT OR IGNORE INTO sending_tiers (slug, name, daily_limit, weekly_limit, sort_order) VALUES (?, ?, ?, ?, ?)',
+        t.slug, t.name, t.daily, t.weekly, i + 1)
+    })
+    for (const m of CREATOR_METRICS) {
+      run(db, `INSERT OR IGNORE INTO creator_metrics
+        (platform, metric_key, label, value, unit, approximate, period_label, period_start, period_end, as_of, source, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        m.platform, m.key, m.label, m.value, m.unit ?? 'count', m.approx ? 1 : 0, m.period ?? null, m.start ?? null,
+        m.end ?? null, m.asOf, m.source, m.notes ?? null, now)
+    }
+  })
+}
