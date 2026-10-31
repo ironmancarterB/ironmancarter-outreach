@@ -14,6 +14,7 @@ import { gatherFacts, type PitchOptions } from './facts'
 import { outreachPriority, PROGRAM_LABELS, type ProgramType } from './programType'
 import { writeTemplate } from './template'
 import { ensureApplication } from './applications'
+import { applySignature, getSignature } from './signature'
 
 export interface PitchRow {
   id: number
@@ -121,8 +122,10 @@ export function updatePitch(db: DB, pitchId: number, input: { subject?: string |
   const p = getPitch(db, pitchId)
   if (p.status !== 'draft' && p.status !== 'approved') throw new AppError(409, 'not_editable', `A ${p.status} pitch cannot be edited. Regenerate to start a new draft.`)
   const subject = input.subject === undefined ? p.subject : (input.subject ?? '').trim().slice(0, 200) || null
-  const body = input.body === undefined ? p.body : String(input.body).replace(/\r\n/g, '\n').trim()
-  if (!body) throw invalid('The pitch cannot be empty')
+  const edited = input.body === undefined ? p.body : String(input.body).replace(/\r\n/g, '\n').trim()
+  if (!edited) throw invalid('The pitch cannot be empty')
+  // Your configured signature, exactly once, whatever sign-off the edited text had.
+  const body = input.body === undefined ? p.body : applySignature(edited, getSignature(db))
   if (body.length > 5000) throw invalid('The pitch is too long')
   if (subject === p.subject && body === p.body) return p
   tx(db, () => {

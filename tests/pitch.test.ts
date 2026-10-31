@@ -74,7 +74,8 @@ describe('pitch generation', () => {
     expect(body).toContain('I saw Brand A runs a creator program')
     expect(body).toContain('7.9M Instagram views and 4.2M YouTube views')
     expect(body).toContain('Between Aug 1 and Oct 29, 2026')
-    expect(body).toContain('ironmancarterbusiness@gmail.com')
+    expect(body.endsWith('\n\nBest,\nCarter')).toBe(true)
+    expect(body).not.toMatch(/\nIronmanCarter\n|ironmancarterbusiness@gmail\.com/)
     expect(body).toContain('media kit')
     expect(body).toMatch(/recurring monthly partnership/)
     expect(body).not.toMatch(/\$/)
@@ -166,7 +167,7 @@ describe('quality checks', () => {
   it('blocks invented numbers, promises, fake history, budgets, prices, other emails and placeholders', async () => {
     const db = freshDb()
     const pitch = await draft(db)
-    const sig = '\n\nBest,\nIronmanCarter\nironmancarterbusiness@gmail.com'
+    const sig = '\n\nBest,\nCarter'
     const base = pitch.body.split('\n\nBest,')[0]
     expect(await blockersAfterEdit(db, pitch.id, `${base} I average 50M views a month.${sig}`)).toContain('unsupported_number')
     expect(await blockersAfterEdit(db, pitch.id, `${base} I guarantee strong sales.${sig}`)).toContain('guarantee')
@@ -175,14 +176,16 @@ describe('quality checks', () => {
     expect(await blockersAfterEdit(db, pitch.id, `${base} It costs $500.${sig}`)).toContain('price')
     expect(await blockersAfterEdit(db, pitch.id, `${base} Ask jane@agency.test.${sig}`)).toContain('other_email')
     expect(await blockersAfterEdit(db, pitch.id, `${base} [insert stat here]${sig}`)).toContain('placeholder')
-    expect(await blockersAfterEdit(db, pitch.id, base)).toContain('signature')
+    // Saving without a sign-off adds your signature once instead of failing.
+    expect(await blockersAfterEdit(db, pitch.id, base)).not.toContain('signature')
+    expect(get<{ body: string }>(db, 'SELECT body FROM pitches WHERE id = ?', pitch.id)!.body.endsWith(`${base.trim()}\n\nBest,\nCarter`)).toBe(true)
     expect(await blockersAfterEdit(db, pitch.id, `${base}${sig}`, 'Re: our chat')).toContain('subject')
   })
 
   it('applies category guardrails for VPN and energy drink brands', async () => {
     const db = freshDb()
     const vpn = await draft(db, 8)
-    const sig = '\n\nBest,\nIronmanCarter\nironmancarterbusiness@gmail.com'
+    const sig = '\n\nBest,\nCarter'
     expect(await blockersAfterEdit(db, vpn.id, `${vpn.body.split('\n\nBest,')[0]} It keeps you completely anonymous online.${sig}`)).toContain('category_claim')
     const drink = await draft(db, 7)
     const drinkBase = drink.body.split('\n\nBest,')[0]
@@ -194,7 +197,7 @@ describe('quality checks', () => {
     const db = freshDb()
     const p = brand(db)
     const f = gatherFacts(db, p.id, { channel: 'email' })
-    const { checks } = runChecks(f, 'Hi', `I hope this email finds you well. Let's create synergy for Brand A.\n\nBest,\nIronmanCarter\nironmancarterbusiness@gmail.com`)
+    const { checks } = runChecks(f, 'Hi', `I hope this email finds you well. Let's create synergy for Brand A.\n\nBest,\nCarter`)
     expect(checks.find((c) => c.code === 'generic')?.message).toMatch(/hope this email finds you well.*synergy/)
   })
 })
@@ -219,7 +222,7 @@ describe('approval workflow', () => {
     const db = freshDb()
     const p = brand(db)
     const pitch = await generatePitch(db, p.id, { channel: 'email' })
-    updatePitch(db, pitch.id, { body: `${pitch.body.split('\n\nBest,')[0]} I guarantee 1M views.\n\nBest,\nIronmanCarter\nironmancarterbusiness@gmail.com` })
+    updatePitch(db, pitch.id, { body: `${pitch.body.split('\n\nBest,')[0]} I guarantee 1M views.\n\nBest,\nCarter` })
     expect(() => approvePitch(db, pitch.id)).toThrow(/Fix these first/)
     updatePitch(db, pitch.id, { body: pitch.body })
     const approved = approvePitch(db, pitch.id)

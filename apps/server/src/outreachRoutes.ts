@@ -17,6 +17,7 @@ import {
 } from '../../../packages/outreach/send'
 import { checkThreadBeforeFollowUp, syncConversations } from '../../../packages/outreach/sync'
 import { CATEGORIES } from '../../../packages/outreach/classify'
+import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 
 type Body = Record<string, unknown>
 const id = (v: unknown) => {
@@ -85,6 +86,9 @@ export function outreachRoutes(app: FastifyInstance, ctx: { db: DB; gmail: Gmail
     confirmed(req.body)
     return resolveSend(db, gmail, id(params(req).id), body(req).outcome)
   })
+
+  // Puts the current signature on every unsent draft (and its Gmail copy). Never sends.
+  app.post('/api/outreach/refresh-signatures', async () => refreshSignatures(db, gmail, dataDir))
 
   // ---------- Controls ----------
   app.get('/api/outreach/controls', async () => ({

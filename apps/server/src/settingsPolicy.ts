@@ -55,6 +55,12 @@ export const VALIDATORS: Record<string, Validator> = {
   'business.creatorName': str(80, false),
   'business.handle': str(80, false),
   'business.email': email,
+  'business.signature': (v) => {
+    const s = (str(200, false)(v) as string).replace(/\r\n/g, '\n').split('\n').map((l) => l.trimEnd()).join('\n').trim()
+    if (s.split('\n').length > 6) throw invalid('Keep the signature to 6 lines or fewer')
+    if (/[\w.+-]+@[\w-]+\.[\w.-]+/.test(s) && !/ironmancarterbusiness@gmail\.com/i.test(s)) throw invalid('The signature may only contain your own business email')
+    return s
+  },
   'business.postalAddress': str(300),
   'business.revenueGoalMonthlyUsd': num(0, 10_000_000),
   'business.sponsorshipMilestonesUsd': (v) => {

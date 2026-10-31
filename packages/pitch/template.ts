@@ -177,7 +177,7 @@ export function writeTemplate(f: Facts): Draft {
     [brand, fit].filter(Boolean).join(' '),
     [concept, offer].filter(Boolean).join(' '),
     [kit, cta].filter(Boolean).join(' '),
-    `Best,\n${f.business.name}\n${f.business.email}`,
+    f.business.signature,
   ].filter(Boolean)
 
   const subject = f.program.type === 'affiliate_only'

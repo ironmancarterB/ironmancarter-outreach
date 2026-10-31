@@ -5,6 +5,7 @@ import { normalizeDomain } from '../core/normalize'
 import type { Claim } from './claims'
 import type { Facts } from './facts'
 import { millions } from './template'
+import { endsWithSignature, stripSignature } from './signature'
 
 export interface Check {
   level: 'blocker' | 'warning'
@@ -13,7 +14,7 @@ export interface Check {
 }
 
 export const bodyWords = (body: string) => {
-  const main = body.split(/\n(?:Best|Thanks|Cheers|Talk soon),?\s*\n/i)[0]
+  const main = stripSignature(body)
   return main.split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length
 }
 
@@ -58,7 +59,8 @@ export function runChecks(f: Facts, subject: string | null, body: string): { che
   if (words < 60 || words > 220) block('word_count', `${words} words. Keep it near 100–150.`)
   else if (words < 100 || words > 150) warn('word_count', `${words} words (target 100–150).`)
 
-  if (!lower.includes(f.business.email.toLowerCase())) block('signature', `The sign-off must include your business email (${f.business.email}).`)
+  if (!endsWithSignature(body, f.business.signature)) block('signature', `End with your signature ("${f.business.signature.replace(/\n/g, ' / ')}"; set it in Settings → Business).`)
+  else if (stripSignature(body, f.business.signature) !== stripSignature(stripSignature(body, f.business.signature))) warn('signature_twice', 'There seems to be a second sign-off above your signature.')
   const otherEmails = (body.match(EMAIL_RE) ?? []).filter((e) => e.toLowerCase() !== f.business.email.toLowerCase())
   if (otherEmails.length) block('other_email', `Contains an email address that is not yours: ${[...new Set(otherEmails)].join(', ')}`)
 

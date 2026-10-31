@@ -5,6 +5,7 @@ import { runAI, type RouterDeps } from '../ai/router'
 import type { DB } from '../db'
 import type { Claim, ClaimSource } from './claims'
 import { runChecks } from './checks'
+import { applySignature } from './signature'
 import type { Facts } from './facts'
 import { millions, periodText, usdRange, type Draft } from './template'
 
@@ -54,9 +55,7 @@ Subject: <accurate subject line>
 
 <email body starting with a greeting>
 
-Best,
-IronmanCarter
-<business email>`
+<sign-off>`
 
 export interface AiAttempt {
   draft: Draft | null
@@ -101,7 +100,8 @@ export async function writeWithLocalAI(db: DB, f: Facts, deps?: RouterDeps): Pro
   }
   if (bad.length) return { draft: null, model, note: `Local AI cited facts that do not exist (${bad.join(', ')}).` }
   let body = raw.replace(/\s*\[F\d+\]/g, '').replace(/[ \t]+\n/g, '\n').trim()
-  if (!body.toLowerCase().includes(f.business.email.toLowerCase())) body = `${body.replace(/\n+(Best|Thanks|Cheers),?[\s\S]*$/i, '')}\n\nBest,\n${f.business.name}\n${f.business.email}`
+  // Whatever sign-off the model wrote is replaced by your configured signature (never two).
+  body = applySignature(body, f.business.signature)
 
   const { checks, wordCount } = runChecks(f, subject, body)
   const blockers = checks.filter((c) => c.level === 'blocker')

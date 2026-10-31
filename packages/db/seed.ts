@@ -9,6 +9,8 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   'business.creatorName': 'IronmanCarter',
   'business.handle': 'ironmancarterttv',
   'business.email': BUSINESS_EMAIL,
+  // Sign-off on every outbound sponsorship email. The compliance footer goes separately below it.
+  'business.signature': 'Best,\nCarter',
   // Required in the footer of commercial email (CAN-SPAM) before live sending can be enabled.
   'business.postalAddress': '',
   'business.revenueGoalMonthlyUsd': 30000,

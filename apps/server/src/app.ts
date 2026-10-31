@@ -40,6 +40,7 @@ import { GoogleApi } from '../../../packages/gmail/google'
 import { defaultSecretStore, memoryStore } from '../../../packages/gmail/secrets'
 import { config } from './config'
 import { afterCrmChange, outreachRoutes } from './outreachRoutes'
+import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 import { recoverInterruptedSends } from '../../../packages/outreach/send'
 import { LOCKED, VALIDATORS, validateSetting } from './settingsPolicy'
 
@@ -144,7 +145,9 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     }
     for (const [k, v] of clean) setSetting(db, k, v)
     if (clean.length) logActivity(db, 'settings.updated', `Updated settings: ${clean.map(([k]) => k).join(', ')}`)
-    return { values: allSettings(db) }
+    // A new signature (or postal address) is applied to every unsent draft right away. Nothing is sent.
+    const signatureRefresh = clean.some(([k]) => k === 'business.signature') ? await refreshSignatures(db, gmail, dataDir) : undefined
+    return { values: allSettings(db), signatureRefresh }
   })
 
   app.get('/api/categories', async () => all(db, 'SELECT * FROM categories ORDER BY sort_order'))

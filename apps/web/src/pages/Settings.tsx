@@ -82,6 +82,7 @@ function Business({ s, reload }: { s: SettingsData; reload: () => void }) {
           </Field>
         </div>
       </Card>
+      <SignatureCard current={String(v['business.signature'] ?? 'Best,\nCarter')} address={f.address} onSaved={reload} />
       <Card title="Goals">
         <div className="space-y-3">
           <Field label="Monthly gross creator-business revenue goal (USD)"><Input type="number" min="0" value={f.goal} onChange={set('goal')} /></Field>
@@ -96,6 +97,44 @@ function Business({ s, reload }: { s: SettingsData; reload: () => void }) {
         })}>Save business settings</Button>
       </div>
     </div>
+  )
+}
+
+// The sign-off on every outbound sponsorship email. Saving it updates every unsent draft (and its Gmail copy) right away.
+function SignatureCard({ current, address, onSaved }: { current: string; address: string; onSaved: () => void }) {
+  const toast = useToast()
+  const [sig, setSig] = useState(current)
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    setBusy(true)
+    try {
+      const r = await api.patch<{ signatureRefresh?: { pitches: number; followUps: number; gmailDraftsUpdated: number; skipped: string[] } }>('/api/settings', { 'business.signature': sig })
+      const x = r.signatureRefresh
+      toast(x ? `Signature saved. Updated ${x.pitches} draft pitch(es), ${x.followUps} follow-up(s) and ${x.gmailDraftsUpdated} Gmail draft(s). Nothing was sent.${x.skipped.length ? ` ${x.skipped.join(' ')}` : ''}` : 'Signature saved')
+      onSaved()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card title="Email signature">
+      <div className="space-y-3">
+        <Field label="Sign-off on every outbound email" hint="Pitches, follow-ups, manual messages and Gmail drafts. Any other sign-off is replaced, never doubled. Sent emails are not changed.">
+          <Textarea className="min-h-16" value={sig} onChange={(e) => setSig(e.target.value)} />
+        </Field>
+        <div>
+          <div className="mb-1 text-xs font-medium text-zinc-500">Preview of the end of an email</div>
+          <pre className="whitespace-pre-wrap rounded-lg bg-zinc-50 p-3 font-sans text-sm dark:bg-zinc-800/50">{`…Would you be open to a quick chat about a paid partnership?\n\n${sig.trim()}\n\n--\n${address.trim() ? `${address.trim()}\n` : '[postal address: Settings → Business]\n'}Prefer not to hear from me? Reply "unsubscribe" and I won\u2019t email you again.`}</pre>
+          <p className="mt-1 text-xs text-zinc-500">The compliance footer (postal address and opt-out line) is added separately below your signature.</p>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => setSig('Best,\nCarter')} disabled={busy}>Use default</Button>
+          <Button variant="primary" onClick={save} disabled={busy || !sig.trim() || sig.trim() === current}>{busy ? 'Saving…' : 'Save signature'}</Button>
+        </div>
+      </div>
+    </Card>
   )
 }
 

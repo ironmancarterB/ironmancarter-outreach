@@ -197,6 +197,16 @@ when the first email is sent, Contacted → **Replied** when the brand replies. 
 yourself (Negotiating, Paused, Won …) are never overwritten. First contact, last contact and last reply dates are recorded; deal
 value, deliverables, usage rights, negotiation notes and the final outcome are yours to edit.
 
+### Email signature
+
+Every outbound sponsorship email (template and local-AI pitches, manual messages, follow-ups, Gmail drafts) ends with your signature
+from **Settings → Business → Email signature** (default `Best,` / `Carter`). Any other sign-off (for example the old
+"Best, IronmanCarter, ironmancarterbusiness@gmail.com") is replaced, and stacked sign-offs are collapsed, so regenerating or editing
+never doubles it; a trailing "P.S." stays below the signature. The compliance footer (postal address and opt-out line) is added
+separately beneath it. Saving a new signature updates every unsent pitch and pending follow-up, and updates their Gmail drafts in place
+(same draft, never sent). Drafts you changed in Gmail are left alone and reported. Sent emails and conversation history are never
+changed. Your sender address and display name are not affected.
+
 ### Follow-ups
 
 After a first email is sent, two follow-ups are scheduled for **your review**: 5 and 12 business days later (configurable), counted

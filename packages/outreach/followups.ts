@@ -9,6 +9,7 @@ import { composeBody, contentHash, createDraft, getDraftRow, verifyDraft, type D
 import { GoogleError, headerValue } from '../gmail/google'
 import { boundaryFor, buildMessage } from '../gmail/mime'
 import { addBusinessDays, calendar } from './businessDays'
+import { applySignature, endsWithSignature, getSignature } from '../pitch/signature'
 
 export interface FollowUpRow {
   id: number
@@ -78,15 +79,13 @@ export function followUpText(db: DB, prospectId: number, sequence: 1 | 2, origin
   const company = get<{ company_name: string }>(db, 'SELECT company_name FROM prospects WHERE id = ?', prospectId)?.company_name ?? 'your team'
   const greeting = original.body.split('\n')[0].match(/^(Hi|Hello|Hey) .{1,80},$/)?.[0] ?? 'Hi there,'
   const when = longDate(original.sentAt, calendar(db).timezone)
-  const name = getSetting<string>(db, 'business.creatorName')
-  const email = getSetting<string>(db, 'business.email')
   const middle = sequence === 1
     ? [`Just following up on my email from ${when} about a possible sponsored collaboration between ${company} and my gaming channel. I'm happy to adjust the idea or send any details you need, and my media kit is attached to that first email.`,
       'Would a quick call, or a short reply with next steps, work for you?']
     : [`Checking in one last time about my note from ${when}. If a creator partnership isn't a priority for ${company} right now, no problem at all, and I won't follow up again.`,
       'If the timing changes, I would love to work together.']
   const subject = original.subject ? (/^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject}`) : 'Re: our sponsorship idea'
-  return { subject, body: [greeting, '', ...middle.flatMap((p) => [p, '']), 'Best,', name, email].join('\n') }
+  return { subject, body: applySignature([greeting, ...middle].join('\n\n'), getSignature(db)) }
 }
 
 const sentences = (s: string) => s.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).map((x) => x.trim().toLowerCase()).filter((x) => x.split(' ').length >= 8)
@@ -102,7 +101,7 @@ export function followUpChecks(db: DB, f: Pick<FollowUpRow, 'body' | 'initial_se
   if (others.length) problems.push(`It contains another email address (${others.join(', ')}).`)
   if (/\bguarantee/i.test(body)) problems.push('It promises results ("guarantee").')
   if (/\$\s?\d/.test(body)) problems.push('It mentions a price. Discuss rates in your own replies.')
-  if (!body.includes(getSetting<string>(db, 'business.creatorName'))) problems.push('The signature is missing.')
+  if (!endsWithSignature(body, getSignature(db))) problems.push('It must end with your signature (Settings → Business).')
   const original = originalOf(db, f)
   const draft = original?.draft_row_id ? get<{ pitch_id: number | null }>(db, 'SELECT pitch_id FROM gmail_drafts WHERE id = ?', original.draft_row_id) : undefined
   const pitchBody = draft?.pitch_id ? get<{ body: string }>(db, 'SELECT body FROM pitches WHERE id = ?', draft.pitch_id)?.body : undefined
@@ -185,8 +184,9 @@ function requirePending(f: FollowUpRow) {
 export function editFollowUp(db: DB, id: number, input: { body?: unknown }) {
   const f = getFollowUp(db, id)
   requirePending(f)
-  const body = typeof input.body === 'string' ? input.body.replace(/\r\n/g, '\n').trim() : null
-  if (!body) throw invalid('The follow-up cannot be empty')
+  const text = typeof input.body === 'string' ? input.body.replace(/\r\n/g, '\n').trim() : null
+  if (!text) throw invalid('The follow-up cannot be empty')
+  const body = applySignature(text, getSignature(db))
   if (body === f.body) return f
   run(db, "UPDATE follow_ups SET body = ?, edited = 1, status = 'scheduled', approved_at = NULL, updated_at = ? WHERE id = ?", body, nowIso(), id)
   logActivity(db, 'followup.edited', `Edited follow-up ${f.sequence}${f.status === 'approved' ? ' (approval withdrawn)' : ''}`, { prospectId: f.prospect_id })

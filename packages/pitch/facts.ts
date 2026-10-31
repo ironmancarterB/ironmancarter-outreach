@@ -1,5 +1,6 @@
 // Collects the verified facts a pitch may use, and flags what is missing. A pitch can only say
 // things that appear here; anything absent is flagged instead of filled in.
+import { getSignature } from './signature'
 import { all, get, getSetting, type DB } from '../db'
 import { contactEligibility, getProspect, type Contact } from '../crm/prospects'
 import type { EligibilityResult } from '../core/eligibility'
@@ -75,7 +76,7 @@ export interface Facts {
   mediaKit: MediaKit | null
   pkg: Package | null
   options: PitchOptions
-  business: { name: string; email: string }
+  business: { name: string; email: string; signature: string }
   flags: Flag[]
 }
 
@@ -168,7 +169,7 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
     mediaKit,
     pkg,
     options,
-    business: { name: getSetting<string>(db, 'business.creatorName'), email: getSetting<string>(db, 'business.email') },
+    business: { name: getSetting<string>(db, 'business.creatorName'), email: getSetting<string>(db, 'business.email'), signature: getSignature(db) },
     flags,
   }
 }
