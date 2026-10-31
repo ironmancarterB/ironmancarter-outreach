@@ -6,6 +6,9 @@ import type { Category, Contact, ProspectDetail as Detail } from '../lib/types'
 import { STAGES } from '../../../../packages/core/stages'
 import { FIT_FACTORS, fitTier } from '../../../../packages/core/scoring'
 
+// Mirrors REVIEW_REQUIRED_STAGES on the server (packages/crm/prospects.ts), which enforces it.
+const REVIEW_STAGES: string[] = ['draft_ready', 'awaiting_approval', 'approved_autopilot', 'contacted']
+
 export default function ProspectDetail({ id, categories, onClose, onChanged }: { id: number; categories: Category[]; onClose: () => void; onChanged: () => void }) {
   const toast = useToast()
   const { data, error, setData } = useApi<Detail>(`/api/prospects/${id}`)
@@ -64,13 +67,18 @@ function DetailBody({ d, categories, mutate, onClose, onDeleted }: { d: Detail; 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Select className="w-auto" value={p.stage} aria-label="Stage"
             onChange={(e) => mutate(() => api.post(`/api/prospects/${p.id}/stage`, { stage: e.target.value }), 'Stage updated')}>
-            {STAGES.map((s) => <option key={s.id} value={s.id} disabled={s.id === 'approved_autopilot'}>{s.label}{s.id === 'approved_autopilot' ? ' (approval gate, Phase 5)' : ''}</option>)}
+            {STAGES.map((s) => {
+              const gated = s.id === 'approved_autopilot' || (REVIEW_STAGES.includes(s.id) && p.review_status !== 'approved')
+              const why = s.id === 'approved_autopilot' ? ' (approval gate, Phase 5)' : gated ? ' (approve first)' : ''
+              return <option key={s.id} value={s.id} disabled={gated}>{s.label}{why}</option>
+            })}
           </Select>
           <Button variant="ghost" size="sm" onClick={del} className="ml-auto text-rose-600">Delete</Button>
         </div>
       </header>
 
       <div className="space-y-5 p-6">
+        <ReviewBanner d={d} mutate={mutate} />
         {d.category?.compliance_note && <Notice tone="amber" title="Category guardrail">{d.category.compliance_note}</Notice>}
         <ProfileSection d={d} categories={categories} mutate={mutate} />
         <ContactsSection d={d} mutate={mutate} />
@@ -79,6 +87,19 @@ function DetailBody({ d, categories, mutate, onClose, onDeleted }: { d: Detail; 
         <TagsSection d={d} mutate={mutate} />
         <SourcesSection d={d} mutate={mutate} />
         <NotesSection d={d} mutate={mutate} />
+        {d.fetches.length > 0 && (
+          <Section title={`Pages visited by research (${d.fetches.length})`}>
+            <ul className="space-y-1 text-xs">
+              {d.fetches.map((f) => (
+                <li key={f.id} className="flex flex-wrap items-center gap-2">
+                  <Badge tone={f.outcome === 'ok' ? 'green' : f.outcome === 'robots_disallowed' ? 'amber' : 'gray'}>{f.outcome === 'ok' ? f.status_code : f.outcome.replace(/_/g, ' ')}{f.outcome === 'http_error' && f.status_code ? ` ${f.status_code}` : ''}</Badge>
+                  <a href={f.final_url ?? f.url} target="_blank" rel="noreferrer noopener" className="break-all text-zinc-600 hover:underline dark:text-zinc-400">{f.final_url ?? f.url}</a>
+                  <span className="text-zinc-400">{dateTime(f.fetched_at)}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
         <Section title="Activity history">
           <ul className="space-y-2 text-sm">
             {d.activities.map((a) => (
@@ -91,6 +112,39 @@ function DetailBody({ d, categories, mutate, onClose, onDeleted }: { d: Detail; 
         </Section>
       </div>
     </>
+  )
+}
+
+function ReviewBanner({ d, mutate }: { d: Detail; mutate: Mutate }) {
+  const p = d.prospect
+  const decide = (decision: 'approved' | 'rejected' | 'pending') => {
+    let note: string | null = null
+    if (decision === 'rejected') {
+      note = prompt(`Why reject ${p.company_name}?`)
+      if (!note?.trim()) return
+    }
+    mutate(() => api.post(`/api/prospects/${p.id}/review`, { decision, note }), decision === 'approved' ? 'Approved' : decision === 'rejected' ? 'Rejected' : 'Back in the review queue')
+  }
+  if (p.review_status === 'approved') {
+    return (
+      <Notice tone="green" title={`Approved ${p.reviewed_at ? relative(p.reviewed_at) : ''}`}>
+        Eligible for future drafting. <button className="underline" onClick={() => decide('pending')}>Undo approval</button>
+      </Notice>
+    )
+  }
+  if (p.review_status === 'rejected') {
+    return (
+      <Notice tone="red" title="Rejected">
+        {p.review_note} <button className="underline" onClick={() => decide('pending')}>Reconsider</button>
+      </Notice>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-brand-700 dark:border-brand-600/30 dark:bg-brand-600/10 dark:text-brand-100">
+      <span className="flex-1"><strong>Awaiting your review.</strong> Check the evidence and sources below. Only approved companies can enter outreach.</span>
+      <Button size="sm" variant="danger" onClick={() => decide('rejected')}>Reject</Button>
+      <Button size="sm" variant="primary" onClick={() => decide('approved')}>Approve</Button>
+    </div>
   )
 }
 
@@ -166,8 +220,25 @@ function ProfileSection({ d, categories, mutate }: { d: Detail; categories: Cate
 
 function ContactsSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
   const [adding, setAdding] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const toast = useToast()
+  const recheck = async () => {
+    setChecking(true)
+    await mutate(async () => {
+      const r = await api.post<{ results: { email: string; result: string }[]; detail: Detail }>(`/api/prospects/${d.prospect.id}/reverify`)
+      toast(r.results.length ? r.results.map((x) => `${x.email}: ${x.result.replace(/_/g, ' ')}`).join(' · ') : 'No sourced email contacts to re-check')
+      return r.detail
+    })
+    setChecking(false)
+  }
+  const sourced = d.contacts.some((c) => c.email && c.source_url)
   return (
-    <Section title="Contacts & eligibility" actions={!adding && <Button size="sm" onClick={() => setAdding(true)}>Add contact</Button>}>
+    <Section title="Contacts & eligibility" actions={!adding && (
+      <div className="flex gap-2">
+        {sourced && <Button size="sm" onClick={recheck} disabled={checking} title="Fetch each source page again and confirm the address is still published">{checking ? 'Checking…' : 'Re-check sources'}</Button>}
+        <Button size="sm" onClick={() => setAdding(true)}>Add contact</Button>
+      </div>
+    )}>
       {d.contacts.length === 0 && !adding && <p className="text-sm text-zinc-500">No contacts. Only add addresses or forms the company publishes for partnership inquiries.</p>}
       <ul className="space-y-3">
         {d.contacts.map((c) => <ContactRow key={c.id} c={c} mutate={mutate} />)}
@@ -374,10 +445,14 @@ function SourcesSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
       {d.sources.length === 0 && <p className="mb-3 text-sm text-zinc-500">No sources yet. Every claim in a pitch should trace back to one.</p>}
       <ul className="mb-3 space-y-1.5 text-sm">
         {d.sources.map((s) => (
-          <li key={s.id} className="flex flex-wrap items-center gap-2">
-            <Badge>{s.kind.replace(/_/g, ' ')}</Badge>
-            <a href={s.url} target="_blank" rel="noreferrer noopener" className="break-all text-brand-600 hover:underline">{s.title || s.url}</a>
-            <span className="text-xs text-zinc-400">{relative(s.retrieved_at)}</span>
+          <li key={s.id}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge>{s.kind.replace(/_/g, ' ')}</Badge>
+              <a href={s.url} target="_blank" rel="noreferrer noopener" className="break-all text-brand-600 hover:underline">{s.title || s.url}</a>
+              <span className="text-xs text-zinc-400" title={s.retrieved_at}>retrieved {dateTime(s.retrieved_at)}</span>
+            </div>
+            {s.title && <div className="break-all text-xs text-zinc-500">{s.url}</div>}
+            {s.snippet && <blockquote className="mt-1 border-l-2 border-zinc-200 pl-2 text-xs italic text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">“{s.snippet}”</blockquote>}
           </li>
         ))}
       </ul>

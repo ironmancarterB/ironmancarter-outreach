@@ -113,6 +113,10 @@ export const VALIDATORS: Record<string, Validator> = {
     return { routineModel: o.routineModel, premiumModel: o.premiumModel }
   },
   'ai.cacheTtlDays': num(1, 365),
+  'research.maxPagesPerSite': num(2, 15),
+  'research.requestDelayMs': num(1000, 10_000),
+  'research.concurrency': num(1, 5),
+  'research.useAiForConcepts': bool,
 }
 
 export function validateSetting(key: string, value: unknown): unknown {

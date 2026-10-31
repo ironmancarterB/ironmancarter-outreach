@@ -23,6 +23,10 @@ export interface ProspectListItem {
   contact_count: number
   primary_email: string | null
   source: string
+  review_status: 'pending' | 'approved' | 'rejected'
+  review_note: string | null
+  reviewed_at: string | null
+  last_researched_at: string | null
   updated_at: string
   created_at: string
 }
@@ -56,8 +60,68 @@ export interface ProspectDetail {
   contacts: Contact[]
   tags: string[]
   notes: { id: number; body: string; created_at: string }[]
-  sources: { id: number; url: string; title: string | null; kind: string; retrieved_at: string }[]
+  sources: { id: number; url: string; title: string | null; kind: string; retrieved_at: string; snippet: string | null }[]
   activities: { id: number; type: string; summary: string; created_at: string }[]
+  fetches: { id: number; url: string; final_url: string | null; status_code: number | null; outcome: string; title: string | null; fetched_at: string }[]
+}
+
+export interface Batch {
+  id: number
+  requested_size: number
+  status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
+  shortfall_note: string | null
+  ai_provider: string
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  total: number
+  remaining: number
+  done: number
+  duplicates: number
+  problems: number
+}
+
+export interface BatchCandidate {
+  id: number
+  company_name: string
+  domain: string
+  category_name: string
+  status: 'pending' | 'researching' | 'done' | 'duplicate' | 'unreachable' | 'blocked' | 'failed' | 'cancelled'
+  message: string | null
+  prospect_id: number | null
+  fit_score: number | null
+  review_status: string | null
+  attempts: number
+}
+
+export interface PoolSummaryRow {
+  id: number
+  name: string
+  enabled: number
+  priority: number
+  research_quota: number
+  available: number
+  total: number
+}
+
+export interface PoolEntry {
+  id: number
+  company_name: string
+  website: string
+  domain: string
+  category_id: number
+  category_name: string
+  origin: string
+  status: 'available' | 'queued' | 'researched' | 'excluded'
+  note: string | null
+  in_crm: number
+}
+
+export interface ResearchStatus {
+  workerHeartbeatAt: string | null
+  workerRunning: boolean
+  active: { id: number; status: string } | null
+  pendingReview: number
 }
 
 export interface Category {
@@ -132,6 +196,8 @@ export interface Overview {
     manualContactQueue: number
     activeNegotiations: number
     followUpsScheduled: number
+    pendingReview: number
+    approved: number
   }
   repliesNeedingAttention: number
   revenue: { contractedCents: number; collectedCents: number; openPipelineCents: number; dealsWon: number }

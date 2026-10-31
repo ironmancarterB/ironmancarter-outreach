@@ -57,3 +57,12 @@ export function useApi<T>(path: string | null) {
   const reload = useCallback(() => setTick((t) => t + 1), [])
   return { data, error, loading, reload, setData }
 }
+
+// Calls fn every `ms` while `active` is true (used to follow a running research batch).
+export function usePoll(fn: () => void, ms: number, active: boolean) {
+  useEffect(() => {
+    if (!active) return
+    const t = setInterval(fn, ms)
+    return () => clearInterval(t)
+  }, [fn, ms, active])
+}

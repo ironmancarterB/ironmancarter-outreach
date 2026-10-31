@@ -56,6 +56,8 @@ export function overview(db: DB, now = new Date()) {
       manualContactQueue: manualQueue,
       activeNegotiations: ACTIVE_DEAL_STAGES.reduce((n, s) => n + stageCounts[s], 0),
       followUpsScheduled: get<{ n: number }>(db, 'SELECT count(*) AS n FROM prospects WHERE next_follow_up_date >= ?', today)!.n,
+      pendingReview: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'pending'")!.n,
+      approved: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'approved'")!.n,
     },
     repliesNeedingAttention: 0,
     revenue: {

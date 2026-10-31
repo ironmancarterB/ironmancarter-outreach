@@ -117,6 +117,45 @@ describe('media kit endpoints', () => {
   })
 })
 
+describe('discovery and review endpoints', () => {
+  it('reports worker status and the starter pool', async () => {
+    const s = (await app.inject({ url: '/api/research/status', headers: H })).json()
+    expect(s).toMatchObject({ workerRunning: false, active: null, pendingReview: 0 })
+    const pool = (await app.inject({ url: '/api/research/pool?summary=1', headers: H })).json()
+    expect(pool.summary).toHaveLength(8)
+    expect(pool.summary.reduce((n: number, c: { available: number }) => n + c.available, 0)).toBeGreaterThan(150)
+  })
+
+  it('queues a batch, blocks a second one, and cancels', async () => {
+    const r = await post('/api/research/batches', { size: 20 })
+    expect(r.statusCode).toBe(201)
+    expect(r.json().batch.total).toBe(20)
+    expect((await post('/api/research/batches', { size: 20 })).statusCode).toBe(409)
+    expect((await post(`/api/research/batches/${r.json().batch.id}/cancel`, {})).json().batch.status).toBe('cancelled')
+    expect((await post('/api/research/batches', { size: 25 })).statusCode).toBe(400)
+  })
+
+  it('rejects duplicate candidates', async () => {
+    expect((await post('/api/research/pool', { company_name: 'Razer', website: 'razer.com', category_id: 1 })).statusCode).toBe(409)
+    expect((await post('/api/research/pool', { company_name: 'New Brand', website: 'newbrand.test', category_id: 1 })).statusCode).toBe(201)
+  })
+
+  it('approves through the review endpoint and gates outreach stages', async () => {
+    const id = (await post('/api/prospects', { company_name: 'Brand', website: 'brand.test' })).json().prospect.id
+    expect((await post(`/api/prospects/${id}/stage`, { stage: 'draft_ready' })).statusCode).toBe(409)
+    const approved = (await post(`/api/prospects/${id}/review`, { decision: 'approved' })).json()
+    expect(approved.prospect).toMatchObject({ review_status: 'approved', stage: 'qualified' })
+    expect((await post(`/api/prospects/${id}/stage`, { stage: 'draft_ready' })).statusCode).toBe(200)
+    const queue = (await app.inject({ url: '/api/prospects?review=pending', headers: H })).json()
+    expect(queue).toHaveLength(0)
+  })
+
+  it('validates research settings', async () => {
+    expect((await patch('/api/settings', { 'research.requestDelayMs': 200 })).statusCode).toBe(400)
+    expect((await patch('/api/settings', { 'research.concurrency': 2 })).statusCode).toBe(200)
+  })
+})
+
 describe('AI endpoints', () => {
   it('runs a test prompt on the free mock provider and records $0', async () => {
     const r = await post('/api/ai/test', { prompt: 'hello' })

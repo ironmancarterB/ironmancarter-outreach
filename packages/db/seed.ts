@@ -1,5 +1,7 @@
 // Default rows inserted on first run. INSERT OR IGNORE keeps any later edits made in the app.
-import { nowIso, run, tx, type DB } from './sql'
+import { normalizeDomain } from '../core/normalize'
+import { BRAND_SEEDS } from './brandSeeds'
+import { get, nowIso, run, tx, type DB } from './sql'
 
 export const BUSINESS_EMAIL = 'ironmancarterbusiness@gmail.com'
 
@@ -31,6 +33,12 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   'ai.ollama': { baseUrl: 'http://127.0.0.1:11434', model: 'gemma4:12b' },
   'ai.anthropic': { routineModel: 'claude-haiku-5-5', premiumModel: 'claude-sonnet-5-5' },
   'ai.cacheTtlDays': 30,
+
+  // Polite research defaults: one request per site every 1.5 s, a few sites at a time.
+  'research.maxPagesPerSite': 8,
+  'research.requestDelayMs': 1500,
+  'research.concurrency': 3,
+  'research.useAiForConcepts': true,
 }
 
 export const CATEGORIES = [
@@ -118,6 +126,19 @@ export function seed(db: DB) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         m.platform, m.key, m.label, m.value, m.unit ?? 'count', m.approx ? 1 : 0, m.period ?? null, m.start ?? null,
         m.end ?? null, m.asOf, m.source, m.notes ?? null, now)
+    }
+    // The candidate pool only exists from migration 002 onward.
+    if (get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'candidate_pool'")) {
+      for (const [slug, brands] of Object.entries(BRAND_SEEDS)) {
+        const cat = get<{ id: number }>(db, 'SELECT id FROM categories WHERE slug = ?', slug)
+        if (!cat) continue
+        for (const [name, website] of brands) {
+          const domain = normalizeDomain(website)
+          if (!domain) continue
+          run(db, `INSERT OR IGNORE INTO candidate_pool (company_name, website, domain, category_id, origin, added_at, updated_at)
+            VALUES (?, ?, ?, ?, 'seed', ?, ?)`, name, website, domain, cat.id, now, now)
+        }
+      }
     }
   })
 }

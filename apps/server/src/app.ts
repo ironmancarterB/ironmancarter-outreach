@@ -14,8 +14,13 @@ import { listMetrics, updateMetric } from '../../../packages/crm/metrics'
 import { overview } from '../../../packages/crm/overview'
 import {
   addContact, addNote, addSource, createProspect, deleteContact, deleteProspect, findDuplicates, getProspectDetail,
-  listProspects, listTags, setStage, setTags, updateContact, updateProspect, type ListFilters,
+  listProspects, listTags, reviewProspect, setStage, setTags, updateContact, updateProspect, type ListFilters,
 } from '../../../packages/crm/prospects'
+import {
+  addPoolCandidate, cancelBatch, createBatch, excludePoolCandidate, getBatch, listBatches, listPool, poolSummary, releasePoolCandidate,
+} from '../../../packages/research/batches'
+import { createFetcher } from '../../../packages/research/fetcher'
+import { reverifyContacts } from '../../../packages/research/pipeline'
 import { addSuppression, listSuppressions, removeSuppression } from '../../../packages/crm/suppressions'
 import {
   getMediaKit, importMediaKit, listMediaKits, MAX_MEDIA_KIT_BYTES, mediaKitFilePath, setDefaultMediaKit, updateMediaKit,
@@ -119,6 +124,8 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       category_id: q.category_id ? id(q.category_id) : undefined,
       tag: q.tag || undefined,
       tier: (['A', 'B', 'C'] as const).find((t) => t === q.tier),
+      review: (['pending', 'approved', 'rejected'] as const).find((r) => r === q.review),
+      source: (['manual', 'csv', 'research'] as const).find((s) => s === q.source),
       sort: (['updated', 'created', 'name', 'score', 'value'] as const).find((s) => s === q.sort),
       dir: q.dir === 'asc' ? 'asc' : 'desc',
     }
@@ -192,6 +199,58 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     return getProspectDetail(db, pid)
   })
   app.get('/api/tags', async () => listTags(db))
+
+  app.post('/api/prospects/:id/review', async (req) => {
+    const pid = id((req.params as Body).id)
+    const b = (req.body ?? {}) as Body
+    reviewProspect(db, pid, b.decision as 'approved', typeof b.note === 'string' ? b.note : null)
+    return getProspectDetail(db, pid)
+  })
+  // Re-checks contacts against the pages they were published on. Reads public pages only.
+  const fetcher = createFetcher({ fetchImpl: opts.fetchImpl, delayMs: 1000 })
+  app.post('/api/prospects/:id/reverify', async (req) => {
+    const pid = id((req.params as Body).id)
+    getProspectDetail(db, pid)
+    const results = await reverifyContacts(db, pid, fetcher)
+    return { results, detail: getProspectDetail(db, pid) }
+  })
+
+  // ---------- Brand discovery ----------
+  app.get('/api/research/status', async () => {
+    const beat = get<{ value: string }>(db, "SELECT value FROM settings WHERE key = 'worker.heartbeatAt'")
+    const at = beat ? (JSON.parse(beat.value) as string) : null
+    return {
+      workerHeartbeatAt: at,
+      workerRunning: !!at && Date.now() - new Date(at).getTime() < 20_000,
+      active: get(db, "SELECT id, status FROM research_batches WHERE status IN ('queued', 'running') ORDER BY id LIMIT 1") ?? null,
+      pendingReview: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'pending'")!.n,
+    }
+  })
+  app.get('/api/research/pool', async (req) => {
+    const q = req.query as Record<string, string | undefined>
+    if (q.summary === '1') return { summary: poolSummary(db), entries: [] }
+    return { summary: poolSummary(db), entries: listPool(db, { category_id: q.category_id ? id(q.category_id) : undefined, status: q.status || undefined }) }
+  })
+  app.post('/api/research/pool', async (req, reply) => {
+    const b = (req.body ?? {}) as Body
+    return reply.code(201).send(addPoolCandidate(db, { company_name: String(b.company_name ?? ''), website: String(b.website ?? ''), category_id: Number(b.category_id) }))
+  })
+  app.post('/api/research/pool/:id/release', async (req) => {
+    releasePoolCandidate(db, id((req.params as Body).id))
+    return { ok: true }
+  })
+  app.post('/api/research/pool/:id/exclude', async (req) => {
+    excludePoolCandidate(db, id((req.params as Body).id), String(((req.body ?? {}) as Body).note ?? ''))
+    return { ok: true }
+  })
+  app.get('/api/research/batches', async () => listBatches(db))
+  app.post('/api/research/batches', async (req, reply) => {
+    const b = (req.body ?? {}) as Body
+    const categoryIds = Array.isArray(b.category_ids) ? (b.category_ids as unknown[]).map((x) => id(x)) : undefined
+    return reply.code(201).send(createBatch(db, { size: Number(b.size), categoryIds }))
+  })
+  app.get('/api/research/batches/:id', async (req) => getBatch(db, id((req.params as Body).id)))
+  app.post('/api/research/batches/:id/cancel', async (req) => cancelBatch(db, id((req.params as Body).id)))
 
   app.get('/api/export/prospects.csv', async (_req, reply) => {
     const date = new Date().toISOString().slice(0, 10)

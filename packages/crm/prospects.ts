@@ -29,6 +29,10 @@ export interface Prospect {
   renewal_date: string | null
   next_follow_up_date: string | null
   source: 'manual' | 'csv' | 'research'
+  review_status: 'pending' | 'approved' | 'rejected'
+  review_note: string | null
+  reviewed_at: string | null
+  last_researched_at: string | null
   created_at: string
   updated_at: string
 }
@@ -79,6 +83,7 @@ export type ContactInput = Partial<{
   verified_at: string | null
   jurisdiction: string
   is_primary: boolean
+  discovered_by: 'manual' | 'research' | 'csv'
 }>
 
 export interface DuplicateMatch {
@@ -208,6 +213,9 @@ export function createProspect(db: DB, input: ProspectInput & { stage?: StageId;
   }
   const stage = input.stage ?? 'discovered'
   if (!isStage(stage)) throw invalid('Unknown stage')
+  if (REVIEW_REQUIRED_STAGES.includes(stage)) {
+    throw new AppError(409, 'review_required', `New companies start unreviewed and cannot be placed in "${stageLabel(stage)}". Approve them first.`)
+  }
   const now = nowIso()
   cols.stage = stage
   cols.source = input.source ?? 'manual'
@@ -249,11 +257,17 @@ const LOCKED_STAGES: Partial<Record<StageId, string>> = {
   approved_autopilot: 'Approval for autopilot is granted by the initial approval gate (Phase 5).',
 }
 
+// Entering the outreach workflow requires your review approval.
+export const REVIEW_REQUIRED_STAGES: StageId[] = ['draft_ready', 'awaiting_approval', 'approved_autopilot', 'contacted']
+
 export function setStage(db: DB, id: number, stage: string, note?: string): Prospect {
   if (!isStage(stage)) throw invalid('Unknown stage')
   if (LOCKED_STAGES[stage]) throw new AppError(409, 'locked_stage', LOCKED_STAGES[stage]!)
   const before = getProspect(db, id)
   if (before.stage === stage) return before
+  if (REVIEW_REQUIRED_STAGES.includes(stage) && before.review_status !== 'approved') {
+    throw new AppError(409, 'review_required', `Approve ${before.company_name} in the review queue before moving it to "${stageLabel(stage)}".`)
+  }
   return tx(db, () => {
     run(db, 'UPDATE prospects SET stage = ?, updated_at = ? WHERE id = ?', stage, nowIso(), id)
     logActivity(db, 'stage.changed', `${stageLabel(before.stage)} → ${stageLabel(stage)}`, { prospectId: id, data: { from: before.stage, to: stage, note } })
@@ -290,6 +304,8 @@ export interface ListFilters {
   category_id?: number
   tag?: string
   tier?: 'A' | 'B' | 'C'
+  review?: 'pending' | 'approved' | 'rejected'
+  source?: Prospect['source']
   sort?: 'updated' | 'created' | 'name' | 'score' | 'value'
   dir?: 'asc' | 'desc'
 }
@@ -321,6 +337,8 @@ export function listProspects(db: DB, f: ListFilters = {}): ProspectListItem[] {
   if (f.tier === 'A') where.push('p.fit_score >= 80')
   if (f.tier === 'B') where.push('p.fit_score BETWEEN 60 AND 79')
   if (f.tier === 'C') where.push('p.fit_score < 60')
+  if (f.review) { where.push('p.review_status = ?'); params.push(f.review) }
+  if (f.source) { where.push('p.source = ?'); params.push(f.source) }
   const order = `${SORTS[f.sort ?? 'updated'] ?? SORTS.updated} ${f.dir === 'asc' ? 'ASC' : 'DESC'}, p.id DESC`
   const rows = all<Prospect & { category_name: string | null; tag_list: string | null; contact_count: number; primary_email: string | null }>(db, `
     SELECT p.*, cat.name AS category_name,
@@ -362,11 +380,30 @@ export function getProspectDetail(db: DB, id: number) {
     contacts,
     tags: all<{ name: string }>(db, 'SELECT t.name FROM prospect_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.prospect_id = ? ORDER BY t.name COLLATE NOCASE', id).map((t) => t.name),
     notes: all<{ id: number; body: string; created_at: string }>(db, 'SELECT id, body, created_at FROM notes WHERE prospect_id = ? ORDER BY created_at DESC, id DESC', id),
-    sources: all<{ id: number; url: string; title: string | null; kind: string; retrieved_at: string; notes: string | null }>(db,
-      'SELECT id, url, title, kind, retrieved_at, notes FROM research_sources WHERE prospect_id = ? ORDER BY retrieved_at DESC', id),
+    sources: all<{ id: number; url: string; title: string | null; kind: string; retrieved_at: string; notes: string | null; snippet: string | null }>(db,
+      'SELECT id, url, title, kind, retrieved_at, notes, snippet FROM research_sources WHERE prospect_id = ? ORDER BY retrieved_at DESC, id', id),
     activities: all<{ id: number; type: string; summary: string; created_at: string }>(db,
       'SELECT id, type, summary, created_at FROM activities WHERE prospect_id = ? ORDER BY created_at DESC, id DESC LIMIT 200', id),
+    fetches: all<{ id: number; url: string; final_url: string | null; status_code: number | null; outcome: string; title: string | null; fetched_at: string }>(db,
+      'SELECT id, url, final_url, status_code, outcome, title, fetched_at FROM research_fetches WHERE prospect_id = ? ORDER BY id', id),
   }
+}
+
+// Your decision on a company before it may enter any outreach workflow.
+export function reviewProspect(db: DB, id: number, decision: 'approved' | 'rejected' | 'pending', note?: string | null): Prospect {
+  if (!['approved', 'rejected', 'pending'].includes(decision)) throw invalid('Decision must be approved, rejected or pending')
+  const before = getProspect(db, id)
+  const clean = text(note ?? null, 'Review note', 2000)
+  if (decision === 'rejected' && !clean) throw invalid('Add a short reason when rejecting')
+  return tx(db, () => {
+    run(db, 'UPDATE prospects SET review_status = ?, review_note = ?, reviewed_at = ?, updated_at = ? WHERE id = ?',
+      decision, clean, decision === 'pending' ? null : nowIso(), nowIso(), id)
+    logActivity(db, `review.${decision}`, decision === 'approved' ? 'Approved after review' : decision === 'rejected' ? `Rejected: ${clean}` : 'Moved back to the review queue',
+      { prospectId: id, data: { note: clean } })
+    if (decision === 'approved' && ['discovered', 'researching'].includes(before.stage)) setStage(db, id, 'qualified', 'Approved in review')
+    if (decision === 'rejected' && !['won', 'lost', 'not_interested', 'opted_out', 'paused'].includes(before.stage)) setStage(db, id, 'paused', 'Rejected in review')
+    return getProspect(db, id)
+  })
 }
 
 function contactColumns(input: ContactInput, existing?: Contact): Record<string, Param> {
@@ -396,6 +433,10 @@ function contactColumns(input: ContactInput, existing?: Contact): Record<string,
     if (out.jurisdiction !== 'unknown' && !/^[A-Z]{2}$/.test(out.jurisdiction)) throw invalid('Jurisdiction must be a 2-letter country code or "unknown"')
   }
   if (has('is_primary')) out.is_primary = input.is_primary ? 1 : 0
+  if (has('discovered_by')) {
+    if (!['manual', 'research', 'csv'].includes(input.discovered_by as string)) throw invalid('Unknown contact origin')
+    out.discovered_by = input.discovered_by!
+  }
   if (has('verification_status')) {
     const s = input.verification_status
     if (!['unverified', 'verified', 'failed'].includes(s as string)) throw invalid('Unknown verification status')

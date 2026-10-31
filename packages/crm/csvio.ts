@@ -84,7 +84,7 @@ export function importCsv(db: DB, text: string, opts: { dryRun?: boolean } = {})
         if (r.contact_email || r.contact_form_url) {
           addContact(db, p.id, {
             name: r.contact_name || null, role: r.contact_role || null, email: r.contact_email || null,
-            source_url: r.contact_source_url || null, contact_form_url: r.contact_form_url || null, is_primary: true,
+            source_url: r.contact_source_url || null, contact_form_url: r.contact_form_url || null, is_primary: true, discovered_by: 'csv',
           })
         }
         if (r.tags) setTags(db, p.id, r.tags.split(/[;|]/))

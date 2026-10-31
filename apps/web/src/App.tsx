@@ -61,7 +61,7 @@ export default function App() {
 
   const content = (() => {
     switch (page) {
-      case 'discovery': return <Discovery />
+      case 'discovery': return <Discovery tab={parts[0]} openId={parts[1] ? Number(parts[1]) : null} />
       case 'prospects': return <Prospects openId={parts[0] ? Number(parts[0]) : null} />
       case 'autopilot': return <Autopilot />
       case 'drafts': return <Drafts />

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { Badge, Button, cx, Empty, ErrorBox, Field, Input, Loading, Modal, Notice, PageHeader, Select, Textarea, TierBadge, useToast } from '../components/ui'
+import { Badge, Button, cx, Empty, ErrorBox, Field, Input, Loading, Modal, Notice, PageHeader, ReviewBadge, Select, Textarea, TierBadge, useToast } from '../components/ui'
 import { api, ApiError, useApi } from '../lib/api'
 import { relative, usd } from '../lib/format'
 import { navigate } from '../lib/router'
@@ -154,6 +154,7 @@ function Board({ items, onMove }: { items: ProspectListItem[]; onMove: (id: numb
                   <div className="mt-0.5 truncate text-xs text-zinc-500">{p.domain ?? 'No website'}</div>
                   <div className="mt-2 flex flex-wrap items-center gap-1">
                     <TierBadge tier={p.fit_tier} score={p.fit_score} />
+                    {p.review_status !== 'approved' && <ReviewBadge status={p.review_status} />}
                     {p.category_name && <Badge>{p.category_name}</Badge>}
                   </div>
                   {(p.negotiated_value_cents ?? p.potential_value_cents) != null && (
@@ -180,7 +181,7 @@ function Table({ items, sort, dir, onSort }: { items: ProspectListItem[]; sort: 
     <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <table className="w-full min-w-[56rem] text-sm">
         <thead className="border-b border-zinc-200 dark:border-zinc-800">
-          <tr><H col="name">Company</H><H>Category</H><H>Stage</H><H col="score">Fit</H><H>Contact</H><H>Tags</H><H col="value" className="text-right">Value</H><H col="updated">Updated</H></tr>
+          <tr><H col="name">Company</H><H>Category</H><H>Stage</H><H>Review</H><H col="score">Fit</H><H>Contact</H><H>Tags</H><H col="value" className="text-right">Value</H><H col="updated">Updated</H></tr>
         </thead>
         <tbody>
           {items.map((p) => (
@@ -188,6 +189,7 @@ function Table({ items, sort, dir, onSort }: { items: ProspectListItem[]; sort: 
               <td className="px-3 py-2.5"><div className="font-medium">{p.company_name}</div><div className="text-xs text-zinc-500">{p.domain ?? '—'}</div></td>
               <td className="px-3 py-2.5 text-zinc-600 dark:text-zinc-400">{p.category_name ?? '—'}</td>
               <td className="px-3 py-2.5"><Badge tone="blue">{stageLabel(p.stage)}</Badge></td>
+              <td className="px-3 py-2.5"><ReviewBadge status={p.review_status} /></td>
               <td className="px-3 py-2.5"><TierBadge tier={p.fit_tier} score={p.fit_score} /></td>
               <td className="px-3 py-2.5 text-zinc-600 dark:text-zinc-400">{p.primary_email ?? (p.contact_count ? 'Form only' : '—')}</td>
               <td className="px-3 py-2.5"><div className="flex flex-wrap gap-1">{p.tags.map((t) => <Badge key={t}>{t}</Badge>)}</div></td>

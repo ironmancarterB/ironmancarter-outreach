@@ -8,11 +8,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev": "concurrently -k -n api,web,worker -c cyan,magenta,yellow \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:worker\"",
     "dev:api": "tsx watch apps/server/src/index.ts",
     "dev:web": "vite",
+    "dev:worker": "tsx watch apps/worker/src/index.ts",
+    "worker": "tsx apps/worker/src/index.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production tsx apps/server/src/index.ts",
+    "start": "concurrently -k -n api,worker -c cyan,yellow \"NODE_ENV=production tsx apps/server/src/index.ts\" \"npm:worker\"",
     "db:migrate": "tsx scripts/migrate.ts",
     "media-kit:import": "tsx scripts/import-media-kit.ts",
     "test": "vitest run",

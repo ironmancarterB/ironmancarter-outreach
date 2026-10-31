@@ -95,6 +95,12 @@ export function TierBadge({ tier, score }: { tier: 'A' | 'B' | 'C' | null; score
   return <Badge tone={tier === 'A' ? 'green' : tier === 'B' ? 'blue' : 'gray'}>Tier {tier} · {score}</Badge>
 }
 
+export function ReviewBadge({ status }: { status: 'pending' | 'approved' | 'rejected' }) {
+  if (status === 'approved') return <Badge tone="green">Approved</Badge>
+  if (status === 'rejected') return <Badge tone="red">Rejected</Badge>
+  return <Badge tone="amber">Needs review</Badge>
+}
+
 export function EligibilityBadge({ status }: { status: 'eligible' | 'needs_review' | 'ineligible' }) {
   if (status === 'eligible') return <Badge tone="green">Eligible</Badge>
   if (status === 'needs_review') return <Badge tone="amber">Needs review</Badge>
