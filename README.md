@@ -1,10 +1,11 @@
 # IronmanCarter Sponsorship Outreach
 
-A local-first command center for researching sponsors, managing the sponsorship CRM and (in later phases)
-sending approved outreach through Gmail. It runs entirely on this Mac.
+A local-first command center for researching sponsors, managing the sponsorship CRM, and sending approved outreach
+through Gmail, one reviewed email at a time. It runs entirely on this Mac.
 
-**Current phase: 4 (Gmail drafts).** The app can connect your Gmail account and turn approved pitches into **Gmail
-drafts**. It contains **no email-sending code** and no paid AI. Autopilot, live sending, sending tiers and paid AI are locked.
+**Current phase: 5 (reply tracking, follow-ups, manual sending).** **Live sending is OFF** until you switch it on in
+Outreach Controls. Even then, every email needs your review and its own confirmation. There is no autopilot, no scheduled
+sending and no bulk sending. No paid AI.
 
 ## Launch it
 
@@ -116,7 +117,7 @@ Google requires every app that uses the Gmail API to have its own OAuth client. 
 2. **APIs & Services → Library → Gmail API → Enable.**
 3. **Google Auth Platform → Get started** (the OAuth consent screen): app name, support email, audience **External**, contact email.
 4. **Audience → Test users → Add** `ironmancarterbusiness@gmail.com`.
-5. **Data access → Add or remove scopes →** `https://www.googleapis.com/auth/gmail.compose` (only this one).
+5. **Data access → Add or remove scopes →** `https://www.googleapis.com/auth/gmail.compose` and `https://www.googleapis.com/auth/gmail.readonly` (only these two).
 6. **Clients → Create client → Desktop app → Create → Download JSON.**
 7. In the app: **Settings → Gmail**, paste the JSON, **Save OAuth client**, then **Connect**. Sign in on Google's page, approve, and the
    page confirms the connection. Google may warn that the app is unverified; that is expected for your own private app.
@@ -125,9 +126,8 @@ Google requires every app that uses the Gmail API to have its own OAuth client. 
 
 - **Sign-in:** Google's OAuth for installed apps (loopback redirect to `127.0.0.1:5181`, PKCE, single-use state). You type your
   password only on Google's own page; the app never sees it.
-- **Permission:** only `gmail.compose`, the narrowest scope that can create drafts (Google documents `drafts.create` as needing
-  `mail.google.com`, `gmail.modify` or `gmail.compose`). Google's own description of it is "Manage drafts and send emails". The app
-  uses it only for drafts and the account address. Connections that grant anything else are discarded and revoked.
+- **Permissions:** see "Gmail permissions" under Phase 5. Connections that grant anything beyond `gmail.compose` and `gmail.readonly`
+  are discarded and revoked.
 - **Only one account:** the app refuses any account other than **Settings → Business → Gmail sending account** and revokes its access.
   To move to a business-domain mailbox later: disconnect, change that setting, connect the new account.
 - **Secrets:** the OAuth client and refresh token are stored in the **macOS Keychain** (service "IronmanCarter Outreach"), never in the
@@ -155,10 +155,90 @@ Google requires every app that uses the Gmail API to have its own OAuth client. 
 - **Weekly reconnect in Testing mode.** Google expires refresh tokens after 7 days for apps whose consent screen is in "Testing" status. The app
   then shows "Reconnect needed". Publishing the app to "In production" removes the 7-day limit but shows an "unverified app" warning on sign-in
   (allowed for personal use; full verification of this restricted scope requires a paid security assessment and is not needed here).
-- **No reply detection yet.** Reading replies and Sent Mail needs a read scope (`gmail.readonly` or `gmail.metadata`), which will be requested
-  in Phase 5 with your approval.
 - **Gmail API quota** is free and far above what this app uses.
 - **Open in Gmail** uses Gmail's `#drafts?compose=<message id>` web link with your account selected.
+
+## Reply tracking, follow-ups and manual sending (Phase 5)
+
+### Gmail permissions
+
+| Scope | Why | What it can do |
+|---|---|---|
+| `gmail.compose` (Phase 4) | Create/update drafts; `drafts.send` for a draft you confirmed | Manage drafts and send email. The app sends only via the confirmed-draft path. |
+| `gmail.readonly` (new) | Read replies, threads and Sent Mail; search for replies from contacts; reconcile uncertain sends | Read mail and settings. **Cannot** delete, label, archive or send. |
+
+Never requested: full access (`https://mail.google.com/`) and `gmail.modify`. `gmail.metadata` was considered and rejected: Google
+does not allow search (`q`) or message bodies with it, so it cannot find replies or classify them. Both scopes are "restricted"; for
+your own unverified app that means the "Google hasn't verified this app" screen, no extra cost.
+
+**Reconnecting (once):** Settings → Gmail → **Reconnect Gmail**, sign in as ironmancarterbusiness@gmail.com, choose Advanced → Go to
+the app, and leave both boxes ticked. Add the `gmail.readonly` scope under Data access in Google Cloud first. The refresh token in the
+Keychain is replaced; the old one is not revoked (revoking would also end the new grant). Drafts keep working without read access.
+
+### What the app reads
+
+Only (1) Gmail threads that started from an email the app sent (or you sent from an app draft) and (2) messages **from the exact
+addresses you emailed**, received after you emailed them. Nothing else in your mailbox is listed, read or stored.
+
+### Conversations and classification
+
+**Outreach → Check Gmail for replies** (or the Conversations tab) reads those threads. Each message is stored once (Gmail message ids
+are unique in the database). Replies are linked to the company and, when the address is in the CRM, to the contact. Anything else
+(another domain, a new address, a reply outside the original thread) is flagged **Needs review**. Replies are classified as Interested,
+Needs more information, Negotiating, Not interested, Out of office, Wrong contact, Referral or Unclear:
+
+- Rules first, conservatively: one clear signal wins; mixed or vague replies are "Unclear" for you to decide.
+- With Ollama selected, the local model may classify, but only if it quotes the reply word for word; otherwise its answer is ignored.
+- You can change any classification. The app never replies, negotiates or accepts anything.
+- "Unsubscribe"-style replies add the sender to the do-not-contact list (opt-out) and stop follow-ups.
+
+CRM stages change automatically only forward and only from outreach stages: Qualified/Draft Ready/Awaiting Approval → **Contacted**
+when the first email is sent, Contacted → **Replied** when the brand replies. Each change is logged with its reason. Stages you set
+yourself (Negotiating, Paused, Won …) are never overwritten. First contact, last contact and last reply dates are recorded; deal
+value, deliverables, usage rights, negotiation notes and the final outcome are yours to edit.
+
+### Follow-ups
+
+After a first email is sent, two follow-ups are scheduled for **your review**: 5 and 12 business days later (configurable), counted
+in your business time zone on your business days, skipping holidays you list in Outreach Controls. They are written fresh (not copied
+from the pitch; a check blocks repeated sentences) and go out as replies in the same Gmail thread. Approve, edit, reschedule, skip or
+cancel each one. They are cancelled automatically when the brand replies or bounces, when the address or domain is suppressed, or when
+the company moves to Replied, Negotiating, Proposal Sent, Won, Lost, Not Interested, Opted Out or Paused. Out-of-office replies do not
+cancel them. **None is ever sent automatically**; right before one is prepared or sent, its thread is re-read for new replies.
+
+### Manual sending
+
+1. Approve the pitch, create its Gmail draft (the draft adds your postal address and an opt-out line).
+2. Outreach → **Sending queue** → **Review & send…** checks every safeguard and reads the draft back from Gmail: live sending on,
+   STOP not active, correct account and permissions, brand approved and ready for first contact, one sequence per company, pitch
+   approved with no blockers, contact verified and **eligible** (unknown or non-US countries are not eligible), not suppressed,
+   compliance footer present, Gmail draft identical to the approved text and media kit (SHA-256), and today's limits.
+3. You see the exact From, To, Subject, body and attachment, tick that you reviewed it, and press Send. The confirmation expires
+   after 10 minutes and works once. The server repeats every check and the Gmail read-back before sending.
+4. The app sends **that one Gmail draft** (`drafts.send`). A sent draft no longer exists, so it cannot be sent twice.
+
+If Google's answer is lost, the send is **SEND STATUS UNCERTAIN** and is never retried. **Reconcile** checks Gmail (read-only): if the
+draft is still in Drafts it was not sent; if the message is in the thread or Sent Mail (matched by its MIME-boundary reference) it was
+sent once. If neither, you check Gmail yourself and record the outcome. A crash mid-send also leaves an uncertain record.
+If you send an app draft from Gmail yourself, the next sync records it like an app send.
+
+### Controls
+
+- **Live sending** is off by default and not changed by connecting Gmail or by tests. Outreach Controls switches it on only when the
+  checklist passes (account, both scopes, matching business email, postal address, STOP off) and you type `ENABLE MANUAL SENDING`.
+- **STOP ALL OUTREACH** blocks every send immediately and voids prepared confirmations. Nothing is deleted. Resume needs confirmation.
+- **Daily ceilings** (server-side, from send records, so they survive restarts): 10 new, 5 follow-ups, 15 total per day, and the
+  sending tier's limit (Testing: 5/day, 25/week). Uncertain sends count. Unused capacity is never filled.
+
+### Limitations
+
+- **Real sending is untested.** All sending tests use a fake Gmail server. Nothing has been sent for real; that waits for your
+  authorization.
+- **Replies from new addresses in a new thread** (for example a colleague starting a fresh email) are not found unless they reply in
+  the original thread; the app does not search whole company domains, to avoid reading newsletters.
+- **Classification is best-effort.** Rules are deliberately conservative and many replies will be "Unclear" for you to classify.
+- **Holidays** are only the ones you list.
+- **Sync is manual** ("Check Gmail for replies"); nothing polls Gmail in the background.
 
 ## Where things live
 
@@ -174,7 +254,8 @@ Google requires every app that uses the Gmail API to have its own OAuth client. 
 | `packages/research/` | Polite fetcher + robots.txt, page extraction, evidence detection, scoring, research pipeline, batches, durable worker queue. |
 | `apps/worker/` | The research worker process (`npm run worker`). Safe to stop any time; interrupted work resumes. |
 | `packages/pitch/` | Fact gathering, program classification, template writer, local-AI writer, checks, evidence validation, approvals, manual applications, packages. |
-| `packages/gmail/` | Google OAuth + draft-only Gmail client (`google.ts`), Keychain secret storage, MIME builder/parser, connection and draft services. |
+| `packages/gmail/` | Google OAuth + Gmail client (`google.ts`; the only send call needs a confirmation from `outreach/send.ts`), Keychain secret storage, MIME builder/parser, connection and draft services. |
+| `packages/outreach/` | Business days, reply classification, conversation sync, follow-ups, manual sending (prepare → confirm, limits, STOP, reconciliation), dashboard data, automatic stage rules. |
 | `scripts/` | Command-line import, migrations, and the one-off media kit email fix. |
 | `tests/` | Vitest suites. |
 | `data/` | **Git-ignored.** `outreach.db`, media kit versions, and `media-kit/originals/` (your untouched original PDF plus the corrected copy). Gmail tokens are not here; they are in the macOS Keychain. |
@@ -208,5 +289,6 @@ cached ones) is logged in Settings → AI & costs.
 - Eligibility for automatic outreach requires verified, sourced, fresh, unsuppressed contacts in an allowed
   jurisdiction (default: US only; everything else needs manual review).
 - Opting a company out suppresses all its addresses permanently. Opt-out suppressions cannot be removed.
-- "Approved for Autopilot" cannot be set by hand or by CSV import.
+- "Approved for Autopilot" cannot be set by hand or by CSV import (autopilot does not exist).
+- Every send needs a fresh, single-use confirmation of the exact message; uncertain sends are never retried.
 - Every change is written to the audit log (Settings → Audit log).

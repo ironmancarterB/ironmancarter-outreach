@@ -365,8 +365,8 @@ describe('packages', () => {
   })
 })
 
-describe('drafts cannot be sent', () => {
-  it('contains no email-sending code anywhere in the app', () => {
+describe('sending is confined to one confirmed path', () => {
+  it('has one send call (drafts.send), reachable only through the manual confirmation module', () => {
     const root = join(import.meta.dirname, '..')
     const files: string[] = []
     const walk = (dir: string) => {
@@ -378,13 +378,23 @@ describe('drafts cannot be sent', () => {
     }
     walk(join(root, 'apps'))
     walk(join(root, 'packages'))
-    // Phase 4 talks to the Gmail API, but only to its draft and profile endpoints; no send endpoint appears anywhere.
-    const offenders = files.filter((f) => /nodemailer|smtp|messages\/send|drafts\/send|users\.(messages|drafts)\.send|sendMail\(|\/send['"`?]/i.test(readFileSync(f, 'utf8')))
-    expect(offenders).toEqual([])
-    const gmailFiles = files.filter((f) => /gmail\.googleapis/.test(readFileSync(f, 'utf8')))
-    expect(gmailFiles.map((f) => f.slice(root.length))).toEqual(['/packages/gmail/google.ts'])
+    const rel = (f: string) => f.slice(root.length)
+    const containing = (re: RegExp) => files.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort()
+    // No other mail-sending mechanism anywhere.
+    expect(containing(/nodemailer|smtp|sendMail\(|users\.messages\.send/i)).toEqual([])
+    // The Gmail API is only called from the Gmail client.
+    expect(containing(/gmail\.googleapis/)).toEqual(['/packages/gmail/google.ts'])
     const google = readFileSync(join(root, 'packages/gmail/google.ts'), 'utf8')
+    expect(google).not.toMatch(/\$\{GMAIL_API\}\/messages\/send/)
+    expect([...google.matchAll(/\$\{GMAIL_API\}\/drafts\/send/g)]).toHaveLength(2) // the guard and sendDraft
     const paths = new Set([...google.matchAll(/\$\{GMAIL_(?:API|UPLOAD)\}\/([a-z]+)/g)].map((m) => m[1]))
-    expect([...paths].sort()).toEqual(['drafts', 'profile'])
+    expect([...paths].sort()).toEqual(['drafts', 'messages', 'profile', 'threads'])
+    // Only the manual-send module can authorize and call a send.
+    expect(containing(/SEND_AUTHORITY/)).toEqual(['/packages/gmail/google.ts', '/packages/outreach/send.ts'])
+    expect(containing(/\.sendDraft\(/)).toEqual(['/packages/outreach/send.ts'])
+    // No scheduler, timer or bulk loop sends anything.
+    const send = readFileSync(join(root, 'packages/outreach/send.ts'), 'utf8')
+    expect(send).not.toMatch(/setInterval|setTimeout|cron/i)
+    expect(containing(/confirmSend\(/)).toEqual(['/apps/server/src/outreachRoutes.ts', '/packages/outreach/send.ts'])
   })
 })

@@ -44,10 +44,11 @@ const obj = (v: unknown) => {
 
 // Locked settings and the reason shown when someone tries to change them.
 export const LOCKED: Record<string, string> = {
-  'outreach.autopilotEnabled': 'Autopilot can only be enabled from the Autopilot Control Center after the initial approval gate (Phase 5).',
-  'outreach.liveSendingEnabled': 'Live sending can only be enabled after testing and your explicit approval (Phase 5).',
-  'outreach.mode': 'The operating mode stays on Research Only until drafting (Phase 3) and sending (Phase 5) are built and approved.',
-  'outreach.sendingTier': 'Sending tiers change only with your explicit approval in the Autopilot Control Center (Phase 5).',
+  'outreach.autopilotEnabled': 'Autopilot (automatic sending) is not authorized. Every email is sent by you, one at a time.',
+  'outreach.liveSendingEnabled': 'Live sending is switched on only through the activation step in Outreach Controls, after its checklist passes and you confirm it.',
+  'outreach.mode': 'The operating mode is fixed; sending is manual only.',
+  'outreach.sendingTier': 'Sending tiers change only with your explicit approval.',
+  'outreach.emergencyStop': 'Use the STOP ALL OUTREACH and Resume controls in Outreach Controls.',
 }
 
 export const VALIDATORS: Record<string, Validator> = {
@@ -71,7 +72,7 @@ export const VALIDATORS: Record<string, Validator> = {
   },
   'outreach.followUps': (v) => {
     const o = obj(v)
-    if (o.enabled === true) throw new AppError(409, 'locked', 'Automatic follow-ups are enabled separately once sending exists (Phase 5).')
+    if (o.enabled === true) throw new AppError(409, 'locked', 'Automatic follow-up sending is not authorized. Follow-ups wait in the queue for your review and manual send.')
     const first = num(1, 30)(o.firstAfterBusinessDays) as number
     const second = num(1, 60)(o.secondAfterBusinessDays) as number
     if (second <= first) throw invalid('The second follow-up must come after the first')
@@ -79,6 +80,17 @@ export const VALIDATORS: Record<string, Validator> = {
     return { enabled: false, firstAfterBusinessDays: first, secondAfterBusinessDays: second, max: Math.round(max) }
   },
   'outreach.researchFreshnessDays': num(1, 365),
+  'outreach.holidays': (v) => {
+    if (!Array.isArray(v) || v.length > 100 || v.some((d) => typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d))) throw invalid('Expected up to 100 dates (YYYY-MM-DD)')
+    return [...new Set(v as string[])].sort()
+  },
+  'outreach.dailyLimits': (v) => {
+    const o = obj(v)
+    const newPerDay = num(0, 50)(o.newPerDay) as number
+    const followUpsPerDay = num(0, 25)(o.followUpsPerDay) as number
+    const totalPerDay = num(0, 75)(o.totalPerDay) as number
+    return { newPerDay: Math.round(newPerDay), followUpsPerDay: Math.round(followUpsPerDay), totalPerDay: Math.round(totalPerDay) }
+  },
   'outreach.autoEligibleJurisdictions': (v) => {
     if (!Array.isArray(v) || v.some((j) => typeof j !== 'string' || !/^[A-Za-z]{2}$/.test(j))) throw invalid('Expected 2-letter country codes')
     return [...new Set((v as string[]).map((j) => j.toUpperCase()))]

@@ -5,6 +5,7 @@ import { dateTime, relative, usd } from '../lib/format'
 import type { Category, Contact, ProspectDetail as Detail, ProspectOutreach } from '../lib/types'
 import { navigate } from '../lib/router'
 import { STAGES } from '../../../../packages/core/stages'
+import { MessageList } from './Outreach'
 import { FIT_FACTORS, fitTier } from '../../../../packages/core/scoring'
 
 // Mirrors REVIEW_REQUIRED_STAGES on the server (packages/crm/prospects.ts), which enforces it.
@@ -70,7 +71,7 @@ function DetailBody({ d, categories, mutate, onClose, onDeleted }: { d: Detail; 
             onChange={(e) => mutate(() => api.post(`/api/prospects/${p.id}/stage`, { stage: e.target.value }), 'Stage updated')}>
             {STAGES.map((s) => {
               const gated = s.id === 'approved_autopilot' || (REVIEW_STAGES.includes(s.id) && p.review_status !== 'approved')
-              const why = s.id === 'approved_autopilot' ? ' (approval gate, Phase 5)' : gated ? ' (approve first)' : ''
+              const why = s.id === 'approved_autopilot' ? ' (not used: no autopilot)' : gated ? ' (approve first)' : ''
               return <option key={s.id} value={s.id} disabled={gated}>{s.label}{why}</option>
             })}
           </Select>
@@ -83,6 +84,7 @@ function DetailBody({ d, categories, mutate, onClose, onDeleted }: { d: Detail; 
         {d.category?.compliance_note && <Notice tone="amber" title="Category guardrail">{d.category.compliance_note}</Notice>}
         <ProfileSection d={d} categories={categories} mutate={mutate} />
         <PitchSection prospectId={p.id} approved={p.review_status === 'approved'} />
+        <ConversationSection prospectId={p.id} />
         <ContactsSection d={d} mutate={mutate} />
         <FitSection d={d} mutate={mutate} />
         <DealSection d={d} mutate={mutate} />
@@ -402,6 +404,17 @@ function FitSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
   )
 }
 
+// The Gmail conversation with this company: what you sent and what they replied (sponsorship threads only).
+function ConversationSection({ prospectId }: { prospectId: number }) {
+  const { data, reload } = useApi<Parameters<typeof MessageList>[0]['messages']>(`/api/prospects/${prospectId}/conversation`)
+  if (!data || !data.length) return null
+  return (
+    <Section title="Conversation" actions={<a className="text-xs text-brand-600 hover:underline" href="#/outreach/conversations">All conversations</a>}>
+      <MessageList messages={data} onChange={reload} />
+    </Section>
+  )
+}
+
 function DealSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
   const p = d.prospect
   const [editing, setEditing] = useState(false)
@@ -410,6 +423,7 @@ function DealSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
     negotiated: p.negotiated_value_cents != null ? String(p.negotiated_value_cents / 100) : '',
     contract_duration: p.contract_duration ?? '', deliverables: p.deliverables ?? '', usage_rights: p.usage_rights ?? '',
     payment_status: p.payment_status, renewal_date: p.renewal_date ?? '', next_follow_up_date: p.next_follow_up_date ?? '',
+    negotiation_notes: p.negotiation_notes ?? '', outcome_note: p.outcome_note ?? '',
   })
   const [f, setF] = useState(init)
   const set = (k: keyof ReturnType<typeof init>) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value })
@@ -419,6 +433,7 @@ function DealSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
       potential_value_cents: toCents(f.potential), negotiated_value_cents: toCents(f.negotiated), contract_duration: f.contract_duration || null,
       deliverables: f.deliverables || null, usage_rights: f.usage_rights || null, payment_status: f.payment_status,
       renewal_date: f.renewal_date || null, next_follow_up_date: f.next_follow_up_date || null,
+      negotiation_notes: f.negotiation_notes || null, outcome_note: f.outcome_note || null,
     }), 'Deal saved')
     if (ok) setEditing(false)
   }
@@ -440,6 +455,8 @@ function DealSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
           </div>
           <Field label="Deliverables"><Textarea value={f.deliverables} onChange={set('deliverables')} /></Field>
           <Field label="Usage rights" hint="Record only what was agreed. Nothing is granted by default."><Textarea value={f.usage_rights} onChange={set('usage_rights')} /></Field>
+          <Field label="Negotiation notes" hint="Offers, counters and terms as they happen. The app never negotiates or accepts anything."><Textarea value={f.negotiation_notes} onChange={set('negotiation_notes')} /></Field>
+          <Field label="Final outcome" hint="Why it was won or lost (set the stage to Won or Lost separately)."><Textarea value={f.outcome_note} onChange={set('outcome_note')} /></Field>
           <div className="flex justify-end gap-2"><Button onClick={() => setEditing(false)}>Cancel</Button><Button variant="primary" onClick={save}>Save</Button></div>
         </div>
       ) : (
@@ -452,6 +469,11 @@ function DealSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
           <Row label="Payment status">{p.payment_status === 'none' ? null : p.payment_status}</Row>
           <Row label="Renewal date">{p.renewal_date}</Row>
           <Row label="Follow-up reminder">{p.next_follow_up_date}</Row>
+          <Row label="First contacted">{p.first_contacted_at ? dateTime(p.first_contacted_at) : null}</Row>
+          <Row label="Last contact">{p.last_contacted_at ? dateTime(p.last_contacted_at) : null}</Row>
+          <Row label="Last reply">{p.last_reply_at ? dateTime(p.last_reply_at) : null}</Row>
+          <Row label="Negotiation notes">{p.negotiation_notes}</Row>
+          <Row label="Final outcome">{p.outcome_note}</Row>
         </dl>
       )}
     </Section>

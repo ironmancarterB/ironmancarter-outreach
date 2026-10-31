@@ -1,5 +1,5 @@
 // Pitch lifecycle: generate → edit / regenerate → approve or reject. Draft mode only: approval marks a
-// pitch as ready for the future approval gate (Phase 5); nothing here can send anything.
+// pitch as ready for a Gmail draft and the manual send step; nothing here can send anything.
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { all, get, getSetting, logActivity, nowIso, run, tx, type DB } from '../db'
@@ -158,7 +158,7 @@ export function approvePitch(db: DB, pitchId: number) {
     run(db, "UPDATE pitches SET status = 'approved', reviewed_at = ?, updated_at = ?, recipient_email = ?, contact_id = ? WHERE id = ?",
       nowIso(), nowIso(), facts.contact?.email ?? p.recipient_email, facts.contact?.id ?? p.contact_id, pitchId)
     if (p.channel === 'email') {
-      if (getProspect(db, p.prospect_id).stage === 'draft_ready') setStage(db, p.prospect_id, 'awaiting_approval', 'Pitch approved; waiting for the initial sending approval gate (Phase 5)')
+      if (getProspect(db, p.prospect_id).stage === 'draft_ready') setStage(db, p.prospect_id, 'awaiting_approval', 'Pitch approved; waiting for you to send it manually')
     } else {
       run(db, "UPDATE manual_applications SET status = 'ready', updated_at = ? WHERE prospect_id = ? AND status = 'not_started'", nowIso(), p.prospect_id)
     }

@@ -31,10 +31,23 @@ export function migrate(db: DB): string[] {
     const version = Number(file.split('_')[0])
     if (applied.has(version)) continue
     const sql = readFileSync(`${MIGRATIONS_DIR}/${file}`, 'utf8')
-    tx(db, () => {
-      db.exec(sql)
-      run(db, 'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', version, file, nowIso())
-    })
+    // Migrations that rebuild a table (SQLite cannot alter CHECK constraints) start with "-- foreign_keys: off".
+    // Foreign keys are switched off around the transaction, as SQLite's documented table-rebuild procedure
+    // requires, and every reference is checked before the migration commits.
+    const rebuild = sql.startsWith('-- foreign_keys: off')
+    if (rebuild) db.exec('PRAGMA foreign_keys = OFF')
+    try {
+      tx(db, () => {
+        db.exec(sql)
+        if (rebuild) {
+          const broken = all(db, 'PRAGMA foreign_key_check')
+          if (broken.length) throw new Error(`Migration ${file} left broken references: ${JSON.stringify(broken.slice(0, 5))}`)
+        }
+        run(db, 'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', version, file, nowIso())
+      })
+    } finally {
+      if (rebuild) db.exec('PRAGMA foreign_keys = ON')
+    }
     ran.push(file)
   }
   return ran

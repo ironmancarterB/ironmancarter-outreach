@@ -25,9 +25,14 @@ export interface Prospect {
   contract_duration: string | null
   deliverables: string | null
   usage_rights: string | null
+  negotiation_notes: string | null
+  outcome_note: string | null
   payment_status: 'none' | 'invoiced' | 'partial' | 'paid'
   renewal_date: string | null
   next_follow_up_date: string | null
+  first_contacted_at: string | null
+  last_contacted_at: string | null
+  last_reply_at: string | null
   source: 'manual' | 'csv' | 'research'
   review_status: 'pending' | 'approved' | 'rejected'
   review_note: string | null
@@ -69,6 +74,8 @@ export type ProspectInput = Partial<{
   contract_duration: string | null
   deliverables: string | null
   usage_rights: string | null
+  negotiation_notes: string | null
+  outcome_note: string | null
   payment_status: Prospect['payment_status']
   renewal_date: string | null
   next_follow_up_date: string | null
@@ -94,7 +101,7 @@ export interface DuplicateMatch {
   value: string
 }
 
-const TEXT_FIELDS = ['products', 'sponsorship_evidence', 'campaign_concept', 'fit_explanation', 'contract_duration', 'deliverables', 'usage_rights'] as const
+const TEXT_FIELDS = ['products', 'sponsorship_evidence', 'campaign_concept', 'fit_explanation', 'contract_duration', 'deliverables', 'usage_rights', 'negotiation_notes', 'outcome_note'] as const
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 const text = (v: unknown, field: string, max = 5000): string | null => {
@@ -255,7 +262,7 @@ export function updateProspect(db: DB, id: number, input: ProspectInput): Prospe
 
 // Stages that need machinery from later phases (approval gate, live sending) cannot be set by hand.
 const LOCKED_STAGES: Partial<Record<StageId, string>> = {
-  approved_autopilot: 'Approval for autopilot is granted by the initial approval gate (Phase 5).',
+  approved_autopilot: 'Autopilot is not available: every email is sent manually after your confirmation.',
 }
 
 // Entering the outreach workflow requires your review approval.

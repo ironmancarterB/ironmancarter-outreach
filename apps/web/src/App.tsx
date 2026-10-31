@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { cx } from './components/ui'
 import { useRoute } from './lib/router'
+import { useApi, usePoll } from './lib/api'
 import Overview from './pages/Overview'
 import Discovery from './pages/Discovery'
 import Prospects from './pages/Prospects'
 import Autopilot from './pages/Autopilot'
-import { FollowUps, ReplyInbox, SentEmails } from './pages/Upcoming'
+import Outreach from './pages/Outreach'
 import Drafts from './pages/Drafts'
 import PitchEditor from './pages/PitchEditor'
 import Deals from './pages/Deals'
@@ -17,11 +18,11 @@ const NAV = [
   { id: 'overview', label: 'Overview', icon: '◎' },
   { id: 'discovery', label: 'Brand Discovery', icon: '⌕' },
   { id: 'prospects', label: 'Prospects', icon: '▤' },
-  { id: 'autopilot', label: 'Outreach Autopilot', icon: '⏻' },
   { id: 'drafts', label: 'Email Drafts', icon: '✎' },
-  { id: 'sent', label: 'Sent Emails', icon: '➤' },
-  { id: 'replies', label: 'Reply Inbox', icon: '✉' },
+  { id: 'outreach', label: 'Outreach', icon: '➤' },
+  { id: 'replies', label: 'Conversations', icon: '✉' },
   { id: 'follow-ups', label: 'Follow-ups', icon: '↻' },
+  { id: 'autopilot', label: 'Outreach Controls', icon: '⏻' },
   { id: 'deals', label: 'Deals', icon: '◆' },
   { id: 'revenue', label: 'Revenue Analytics', icon: '▲' },
   { id: 'media-kit', label: 'Media Kit', icon: '▣' },
@@ -67,9 +68,10 @@ export default function App() {
       case 'prospects': return <Prospects openId={parts[0] ? Number(parts[0]) : null} />
       case 'autopilot': return <Autopilot />
       case 'drafts': return parts[0] === 'pitch' && parts[1] ? <PitchEditor id={Number(parts[1])} /> : <Drafts tab={parts[0]} />
-      case 'sent': return <SentEmails />
-      case 'replies': return <ReplyInbox />
-      case 'follow-ups': return <FollowUps />
+      case 'outreach': return <Outreach tab={parts[0]} />
+      case 'sent': return <Outreach tab="sent" />
+      case 'replies': return <Outreach tab="conversations" />
+      case 'follow-ups': return <Outreach tab="follow-ups" />
       case 'deals': return <Deals />
       case 'revenue': return <Revenue />
       case 'media-kit': return <MediaKitPage />
@@ -103,9 +105,7 @@ export default function App() {
             ))}
           </nav>
           <div className="border-t border-zinc-200 p-3 dark:border-zinc-800">
-            <div className="mb-2 flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden /> No email sending in this build
-            </div>
+            <SendingStatus />
             <div className="flex rounded-lg bg-zinc-100 p-0.5 text-xs dark:bg-zinc-800" role="group" aria-label="Theme">
               {(['light', 'system', 'dark'] as const).map((t) => (
                 <button key={t} onClick={() => setTheme(t)}
@@ -126,5 +126,21 @@ export default function App() {
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{content}</main>
       </div>
     </div>
+  )
+}
+
+// Sidebar status: live sending off / manual sending on / STOPPED. Refreshed every 30 seconds.
+function SendingStatus() {
+  const { data, reload } = useApi<{ liveSendingEnabled: boolean; emergencyStop: boolean }>('/api/health')
+  usePoll(reload, 30_000, true)
+  const state = !data ? null : data.emergencyStop ? 'stopped' : data.liveSendingEnabled ? 'live' : 'off'
+  const cls = state === 'stopped' ? 'bg-rose-50 text-rose-800 dark:bg-rose-500/10 dark:text-rose-300'
+    : state === 'live' ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300' : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300'
+  const dot = state === 'stopped' ? 'bg-rose-500' : state === 'live' ? 'bg-amber-500' : 'bg-emerald-500'
+  return (
+    <a href="#/autopilot" className={cx('mb-2 flex items-center gap-2 rounded-lg px-3 py-2 text-xs', cls)}>
+      <span className={cx('h-2 w-2 rounded-full', dot)} aria-hidden />
+      {state === 'stopped' ? 'ALL OUTREACH STOPPED' : state === 'live' ? 'Manual sending on' : 'Live sending off'}
+    </a>
   )
 }

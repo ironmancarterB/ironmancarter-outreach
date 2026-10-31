@@ -18,7 +18,7 @@ export default function GmailSettings() {
   // While you are on Google's consent page, check every few seconds whether the connection arrived.
   const poll = useCallback(async () => {
     const s = await api.get<GmailStatus>('/api/gmail/status').catch(() => null)
-    if (s?.account?.status === 'connected') {
+    if (s?.account?.status === 'connected' && !s.account.missingScopes.length) {
       setWaiting(false)
       toast(`Connected ${s.account.email}`)
       reloadAll()
@@ -30,6 +30,7 @@ export default function GmailSettings() {
   if (!status.data) return <Loading />
   const s = status.data
   const connected = s.account?.status === 'connected'
+  const needsUpgrade = connected && !!s.account?.missingScopes.length
 
   const act = async (label: string, fn: () => Promise<unknown>, ok: string) => {
     setBusy(label)
@@ -63,17 +64,29 @@ export default function GmailSettings() {
 
   return (
     <div className="space-y-5">
-      <Notice tone="green" title="Drafts only. Sending is disabled.">
-        The app can create and update drafts in your Gmail Drafts folder. It has no code that sends email, and approving a pitch is not permission to send.
-        Sending is built in Phase 5 and stays off until you explicitly enable it.
+      <Notice tone={s.liveSendingEnabled ? 'amber' : 'green'} title={s.liveSendingEnabled ? 'Live sending is on (manual mode)' : 'Live sending is off'}>
+        The app creates drafts and reads only your sponsorship conversations. It sends an email only when you review it and confirm that one email in the send dialog.
+        Approving a pitch or a follow-up is never permission to send. {s.liveSendingEnabled ? '' : 'Live sending is switched on separately in Outreach Controls.'}
       </Notice>
+      {needsUpgrade && (
+        <Notice tone="amber" title="Reconnect to add read access">
+          Reply tracking, follow-up checks and safe send reconciliation need <code className="text-xs">gmail.readonly</code>, which this connection does not have yet.
+          Drafts keep working. Press <strong>Reconnect Gmail</strong> below; Google will ask you to approve read access for the same account.
+        </Notice>
+      )}
 
       <Card title="Connection" actions={connected ? <Badge tone="green">Connected</Badge> : s.account?.status === 'needs_reconnect' ? <Badge tone="amber">Reconnect needed</Badge> : <Badge tone="gray">Not connected</Badge>}>
         <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[12rem_1fr]">
           <dt className="text-zinc-500">Account</dt>
           <dd className="break-all">{s.account ? s.account.email : `Only ${s.expectedAccount} can connect`}{s.account && ` · since ${dateTime(s.account.connectedAt)}`}</dd>
-          <dt className="text-zinc-500">Permission requested</dt>
-          <dd><code className="break-all text-xs">{s.requestedScopes.join(' ')}</code><div className="text-xs text-zinc-500">Create, read and update drafts. Google describes it as “Manage drafts and send emails”; this app has no sending code. It is the narrowest permission that can create drafts.</div></dd>
+          <dt className="text-zinc-500">Permissions</dt>
+          <dd className="space-y-1.5">
+            <div><code className="break-all text-xs">gmail.compose</code> {s.account?.scopes.some((x) => x.endsWith('gmail.compose')) ? <span className="text-xs text-emerald-600">granted</span> : <span className="text-xs text-amber-600">not granted</span>}
+              <div className="text-xs text-zinc-500">Create, update and send drafts, and read your address. The app sends only a draft you confirmed. The narrowest permission that can create drafts.</div></div>
+            <div><code className="break-all text-xs">gmail.readonly</code> {s.account?.readAccess ? <span className="text-xs text-emerald-600">granted</span> : <span className="text-xs text-amber-600">not granted</span>}
+              <div className="text-xs text-zinc-500">Read replies and Sent Mail, so the app can match replies, stop follow-ups and check whether an uncertain send went out. It cannot delete or change anything. The app only reads threads it started and messages from addresses you emailed.</div></div>
+            <div className="text-xs text-zinc-500">Never requested: full access (mail.google.com) and gmail.modify.</div>
+          </dd>
           <dt className="text-zinc-500">Tokens stored in</dt>
           <dd>{s.secretStorage}. Never in the database, the project folder or Git. Your Gmail password never reaches the app.</dd>
           <dt className="text-zinc-500">OAuth client</dt>
@@ -83,7 +96,7 @@ export default function GmailSettings() {
         </dl>
         {s.account?.lastError && <div className="mt-3"><Notice tone="amber">{s.account.lastError}</Notice></div>}
         <div className="mt-4 flex flex-wrap gap-2">
-          {!connected && <Button variant="primary" onClick={connect} disabled={!s.clientConfigured || busy !== null}>{s.account?.status === 'needs_reconnect' ? 'Reconnect Gmail' : `Connect ${s.expectedAccount}`}</Button>}
+          {(!connected || needsUpgrade) && <Button variant="primary" onClick={connect} disabled={!s.clientConfigured || busy !== null}>{s.account ? 'Reconnect Gmail' : `Connect ${s.expectedAccount}`}</Button>}
           {connected && <Button variant="primary" onClick={testDraft} disabled={busy !== null}>{busy === 'test' ? 'Creating…' : 'Create test draft to myself'}</Button>}
           {connected && <Button onClick={sync} disabled={busy !== null}>{busy === 'sync' ? 'Syncing…' : 'Sync with Gmail'}</Button>}
           {s.account && <Button variant="danger" onClick={disconnect} disabled={busy !== null}>Disconnect</Button>}
@@ -158,7 +171,7 @@ function Setup({ s, onSaved }: { s: GmailStatus; onSaved: () => void }) {
         <li>APIs &amp; Services → Library → <strong>Gmail API</strong> → Enable.</li>
         <li>Google Auth Platform (OAuth consent screen) → Get started: app name “IronmanCarter Outreach”, support email {s.expectedAccount}, audience <strong>External</strong>, contact email, agree to the policy.</li>
         <li>Audience → Test users → add <strong>{s.expectedAccount}</strong>. (In Testing mode Google ends the connection every 7 days; you reconnect with one click.)</li>
-        <li>Data access → Add or remove scopes → add <code className="text-xs">{s.requestedScopes[0]}</code> only.</li>
+        <li>Data access → Add or remove scopes → add <code className="text-xs">gmail.compose</code> and <code className="text-xs">gmail.readonly</code> only.</li>
         <li>Clients → Create client → Application type <strong>Desktop app</strong> → Create → <strong>Download JSON</strong>.</li>
         <li>Paste the downloaded file’s contents below (or the client ID and secret) and save. Then press Connect.</li>
       </ol>

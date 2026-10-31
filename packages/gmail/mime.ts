@@ -10,6 +10,7 @@ export interface OutgoingMessage {
   // MIME boundary of the attachment message. Gmail replaces any Message-ID the app sets but keeps the boundary,
   // so the boundary carries the draft's unique reference (see boundaryFor).
   boundary?: string
+  headers?: Record<string, string>   // extra headers, e.g. In-Reply-To and References for follow-ups
   attachment?: { filename: string; mimeType: string; data: Buffer }
 }
 
@@ -44,11 +45,12 @@ export const boundaryFor = (ref: string) => `=_ic_${ref.replace(/[^0-9a-z]/gi, '
 export const boundaryOf = (contentType: string | null | undefined) => param(contentType ?? undefined, 'boundary')
 
 export function buildMessage(m: OutgoingMessage): Buffer {
-  for (const v of [m.to, m.from.email]) if (/[\r\n]/.test(v)) throw new Error('Header values cannot contain line breaks')
+  for (const v of [m.to, m.from.email, ...Object.keys(m.headers ?? {}), ...Object.values(m.headers ?? {})]) if (/[\r\n]/.test(v)) throw new Error('Header values cannot contain line breaks')
   const headers = [
     `From: ${quotedName(m.from.name)} <${m.from.email}>`,
     `To: ${m.to}`,
     `Subject: ${encodeHeader(m.subject)}`,
+    ...Object.entries(m.headers ?? {}).map(([k, v]) => `${k}: ${v}`),
     'MIME-Version: 1.0',
   ]
   const text = Buffer.from(m.body.replace(/\r?\n/g, '\r\n'), 'utf8')

@@ -6,7 +6,7 @@ import { addContact, createProspect, reviewProspect } from '../packages/crm/pros
 import { importMediaKit } from '../packages/mediakit/store'
 import { approvePitch, generatePitch, updatePitch } from '../packages/pitch/service'
 import { forgetAccessTokens } from '../packages/gmail/account'
-import { GoogleApi, GoogleError } from '../packages/gmail/google'
+import { GoogleApi, GoogleError, SendAuthorization } from '../packages/gmail/google'
 import { boundaryFor, boundaryOf, buildMessage, parseMessage, sha256 } from '../packages/gmail/mime'
 import { memoryStore } from '../packages/gmail/secrets'
 import { fakeGoogle } from './fakeGoogle'
@@ -88,10 +88,11 @@ describe('MIME message', () => {
 })
 
 describe('Google client safety', () => {
-  it('refuses any Gmail send endpoint', async () => {
+  it('refuses every send endpoint unless a confirmed send authorization is used', async () => {
     const api = new GoogleApi(google.fetchImpl) as unknown as { request: (u: string, i: RequestInit) => Promise<Response> }
-    await expect(api.request('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST' })).rejects.toThrow(/never sends/)
-    await expect(api.request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', { method: 'POST' })).rejects.toThrow(/never sends/)
+    await expect(api.request('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST' })).rejects.toThrow(/only sends a confirmed draft/)
+    await expect(api.request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', { method: 'POST' })).rejects.toThrow(/only sends a confirmed draft/)
+    expect(() => new SendAuthorization(Symbol('fake'), 'r-1', 1)).toThrow(/confirmation/)
     expect(google.state.requests).toHaveLength(0)
   })
 
@@ -111,7 +112,7 @@ describe('connecting Gmail (OAuth)', () => {
     const { url } = (await req('POST', '/api/gmail/connect', {})).json()
     const u = new URL(url)
     expect(u.origin + u.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth')
-    expect(u.searchParams.get('scope')).toBe('https://www.googleapis.com/auth/gmail.compose')
+    expect(u.searchParams.get('scope')).toBe('https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.readonly')
     expect(u.searchParams.get('code_challenge_method')).toBe('S256')
     expect(u.searchParams.get('login_hint')).toBe('ironmancarterbusiness@gmail.com')
     expect(u.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:5181/api/gmail/oauth/callback')
@@ -122,8 +123,9 @@ describe('connecting Gmail (OAuth)', () => {
     expect(r.statusCode).toBe(200)
     expect(r.body).toContain('Connected ironmancarterbusiness@gmail.com')
     const s = (await req('GET', '/api/gmail/status')).json()
-    expect(s.account).toMatchObject({ email: 'ironmancarterbusiness@gmail.com', status: 'connected', scopes: ['https://www.googleapis.com/auth/gmail.compose'] })
-    expect(s.sendingEnabled).toBe(false)
+    expect(s.account).toMatchObject({ email: 'ironmancarterbusiness@gmail.com', status: 'connected', readAccess: true, missingScopes: [],
+      scopes: ['https://www.googleapis.com/auth/gmail.compose', 'https://www.googleapis.com/auth/gmail.readonly'] })
+    expect(s.liveSendingEnabled).toBe(false)
     expect(secrets.values.get('gmail-refresh-token:ironmancarterbusiness@gmail.com')).toBe('rt-secret')
     const dump = JSON.stringify(all(db, 'SELECT * FROM mail_accounts')) + JSON.stringify(all(db, 'SELECT * FROM gmail_operations')) + JSON.stringify(all(db, 'SELECT * FROM activities'))
     expect(dump).not.toContain('rt-secret')
@@ -143,8 +145,10 @@ describe('connecting Gmail (OAuth)', () => {
   it('refuses a connection without the drafts permission, or with extra permissions', async () => {
     google.state.scope = 'openid'
     expect((await connect()).body).toContain('was not granted')
-    google.state.scope = 'https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.readonly'
+    google.state.scope = 'https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify'
     expect((await connect()).body).toContain('did not ask for')
+    google.state.scope = 'https://mail.google.com/'
+    expect((await connect()).body).toContain('was not granted')
     expect(get(db, 'SELECT 1 FROM mail_accounts')).toBeUndefined()
   })
 
@@ -203,8 +207,7 @@ describe('Gmail drafts from approved pitches', () => {
     expect(g.draft.verification.checks.map((c: { label: string }) => c.label)).toContain('Body matches what the app wrote')
     expect(r.json().attachment.gmailAttachmentVerified).toBe(true)
 
-    const stored = [...google.state.drafts.values()][0]
-    const parsed = parseMessage(stored.raw)
+    const parsed = parseMessage(google.draftRaw([...google.state.drafts.keys()][0]))
     expect(parsed.headers.from).toBe('"IronmanCarter" <ironmancarterbusiness@gmail.com>')
     expect(parsed.headers.to).toBe('partnerships@brand-a.test')
     expect(sha256(parsed.parts.find((p) => p.contentType === 'application/pdf')!.data)).toBe(sha256(kitPdf))
@@ -320,7 +323,7 @@ describe('Gmail drafts from approved pitches', () => {
     expect(r.json().gmail.draft).toMatchObject({ outOfDate: false, subject: 'Brand A x IronmanCarter: League Shorts' })
     expect(r.json().gmail.draft.verification.ok).toBe(true)
     expect([...google.state.drafts.keys()]).toEqual([draftId])
-    expect(parseMessage(google.state.drafts.get(draftId)!.raw).headers.subject).toBe('Brand A x IronmanCarter: League Shorts')
+    expect(parseMessage(google.draftRaw(draftId)).headers.subject).toBe('Brand A x IronmanCarter: League Shorts')
   })
 
   it('refuses when the media kit file no longer matches its checksum', async () => {
@@ -340,15 +343,15 @@ describe('Gmail drafts from approved pitches', () => {
     expect((await req('POST', '/api/gmail/test-draft', { confirm: true })).json().error.code).toBe('duplicate')
   })
 
-  it('never calls a send endpoint and exposes none', async () => {
+  it('creating and syncing drafts never calls a send endpoint', async () => {
     await connect()
     const { pitch } = await approvedPitch()
     await createDraft(pitch.id)
     await req('POST', '/api/gmail/sync', {})
     expect(google.state.requests.filter((r) => /\/send\b/.test(new URL(r.url).pathname))).toHaveLength(0)
-    for (const path of [`/api/pitches/${pitch.id}/send`, '/api/gmail/send', `/api/gmail/drafts/1/send`]) {
+    for (const path of [`/api/pitches/${pitch.id}/send`, '/api/gmail/send', `/api/gmail/drafts/1/send`, '/api/outreach/send', '/api/outreach/send/bulk']) {
       expect((await req('POST', path, {})).statusCode).toBe(404)
     }
-    expect((await req('GET', '/api/health')).json()).toEqual({ ok: true, sendingCodePresent: false })
+    expect((await req('GET', '/api/health')).json()).toEqual({ ok: true, sendingCodePresent: true, liveSendingEnabled: false, autopilot: false, emergencyStop: false })
   })
 })

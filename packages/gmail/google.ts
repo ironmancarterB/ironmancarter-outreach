@@ -1,14 +1,21 @@
-// Google's OAuth 2.0 for installed apps (loopback redirect + PKCE) and the few Gmail API calls the app makes.
+// Google's OAuth 2.0 for installed apps (loopback redirect + PKCE) and the Gmail API calls the app makes.
 // Plain fetch against Google's documented endpoints; no Google SDK and nothing that costs money.
 //
-// SAFETY: this client can only create, update, read and list drafts and read the account address.
-// It has no send method, and request() refuses any URL that would send mail.
+// SAFETY: the only call that can send mail is sendDraft(), which sends one existing, verified draft and
+// requires a SendAuthorization that only the manual-send confirmation step (packages/outreach/send.ts)
+// can create. request() refuses every other send URL, including messages/send.
 import { createHash, randomBytes } from 'node:crypto'
 
-// gmail.compose is the narrowest scope that allows drafts.create (Google lists only mail.google.com,
-// gmail.modify and gmail.compose). It also covers drafts.get/list/update and users.getProfile.
-// Note: Google's description of this scope is "Manage drafts and send emails"; this app has no sending code.
-export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.compose'] as const
+export const SCOPE_COMPOSE = 'https://www.googleapis.com/auth/gmail.compose'
+export const SCOPE_READONLY = 'https://www.googleapis.com/auth/gmail.readonly'
+
+// gmail.compose: create/update/send drafts and read the account address (Google lists only mail.google.com,
+// gmail.modify and gmail.compose for drafts.create and drafts.send).
+// gmail.readonly: read threads, replies and Sent Mail, and search with q (gmail.metadata cannot search or read
+// bodies). Neither scope can delete mail or change labels. Full access (mail.google.com) and gmail.modify are
+// never requested.
+export const GMAIL_SCOPES = [SCOPE_COMPOSE, SCOPE_READONLY] as const
+export const REQUIRED_SCOPES = [SCOPE_COMPOSE] as const
 
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -66,11 +73,21 @@ export function authUrl(client: OAuthClient, opts: { redirectUri: string; state:
 
 const isSendUrl = (url: string) => /\/send(\b|$|\?)/i.test(new URL(url).pathname)
 
+// Proof that the user confirmed this exact draft moments ago. Only send.ts can mint one (the symbol is not
+// exported elsewhere), and each is single-use.
+export const SEND_AUTHORITY = Symbol('manual-send-confirmation')
+export class SendAuthorization {
+  used = false
+  constructor(key: symbol, readonly draftId: string, readonly sendAttemptId: number) {
+    if (key !== SEND_AUTHORITY) throw new Error('Refused: sending needs your confirmation in the dashboard.')
+  }
+}
+
 export class GoogleApi {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
-  private async request(url: string, init: RequestInit): Promise<Response> {
-    if (isSendUrl(url)) throw new Error('Refused: this app never sends email through the Gmail API.')
+  private async request(url: string, init: RequestInit, auth?: SendAuthorization): Promise<Response> {
+    if (isSendUrl(url) && !(auth && url === `${GMAIL_API}/drafts/send`)) throw new Error('Refused: the app only sends a confirmed draft, never any other way.')
     try {
       return await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) })
     } catch (err) {
@@ -119,8 +136,8 @@ export class GoogleApi {
     if (!res.ok && res.status !== 400) await this.json(res) // 400 = already invalid; nothing left to revoke
   }
 
-  private gmail<T>(accessToken: string, url: string, init: RequestInit = {}) {
-    return this.request(url, { ...init, headers: { ...(init.headers as Record<string, string>), authorization: `Bearer ${accessToken}` } }).then((r) => this.json<T>(r))
+  private gmail<T>(accessToken: string, url: string, init: RequestInit = {}, auth?: SendAuthorization) {
+    return this.request(url, { ...init, headers: { ...(init.headers as Record<string, string>), authorization: `Bearer ${accessToken}` } }, auth).then((r) => this.json<T>(r))
   }
 
   profile(accessToken: string) {
@@ -146,6 +163,42 @@ export class GoogleApi {
     return this.gmail<GmailDraft>(accessToken, `${GMAIL_API}/drafts/${encodeURIComponent(draftId)}?format=${format}${q}`)
   }
 
+  // Threaded draft (follow-ups). JSON body so the thread id can be given; follow-ups carry no attachment.
+  createDraftInThread(accessToken: string, raw: Buffer, threadId: string) {
+    return this.gmail<GmailDraft>(accessToken, `${GMAIL_API}/drafts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: { raw: raw.toString('base64url'), threadId } }),
+    })
+  }
+
+  updateDraftInThread(accessToken: string, draftId: string, raw: Buffer, threadId: string) {
+    return this.gmail<GmailDraft>(accessToken, `${GMAIL_API}/drafts/${encodeURIComponent(draftId)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: draftId, message: { raw: raw.toString('base64url'), threadId } }),
+    })
+  }
+
+  // Sends ONE existing draft. A sent draft stops existing, so the same draft can never be sent twice.
+  sendDraft(accessToken: string, auth: SendAuthorization) {
+    if (auth.used) throw new Error('Refused: this confirmation was already used.')
+    auth.used = true
+    return this.gmail<GmailMessage>(accessToken, `${GMAIL_API}/drafts/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: auth.draftId }),
+    }, auth)
+  }
+
+  // ---------- Read-only (gmail.readonly) ----------
+
+  getThread(accessToken: string, threadId: string, format: 'full' | 'metadata' = 'full') {
+    return this.gmail<{ id: string; messages?: GmailMessage[] }>(accessToken, `${GMAIL_API}/threads/${encodeURIComponent(threadId)}?format=${format}`)
+  }
+
+  getMessage(accessToken: string, messageId: string, format: 'full' | 'metadata' = 'full') {
+    return this.gmail<GmailMessage>(accessToken, `${GMAIL_API}/messages/${encodeURIComponent(messageId)}?format=${format}`)
+  }
+
+  listMessages(accessToken: string, query: string) {
+    return this.gmail<{ messages?: { id: string; threadId: string }[] }>(accessToken, `${GMAIL_API}/messages?maxResults=50&q=${encodeURIComponent(query)}`)
+  }
+
   listDrafts(accessToken: string, query: string) {
     return this.gmail<{ drafts?: { id: string; message: { id: string; threadId: string } }[] }>(accessToken,
       `${GMAIL_API}/drafts?maxResults=50&q=${encodeURIComponent(query)}`)
@@ -164,6 +217,29 @@ export interface GmailDraft {
   }
 }
 
+export interface GmailPart {
+  mimeType?: string
+  filename?: string
+  headers?: { name: string; value: string }[]
+  body?: { data?: string; size?: number; attachmentId?: string }
+  parts?: GmailPart[]
+}
+
+export interface GmailMessage {
+  id: string
+  threadId: string
+  labelIds?: string[]
+  snippet?: string
+  internalDate?: string
+  payload?: GmailPart
+}
+
+export const headerValue = (m: { payload?: GmailPart }, name: string) =>
+  m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? null
+
 // Opens the draft in Gmail's web app, signed in as the right account.
+export const gmailThreadLink = (account: string, threadId: string) =>
+  `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(account)}#all/${encodeURIComponent(threadId)}`
+
 export const gmailDraftLink = (account: string, messageId: string) =>
   `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(account)}#drafts?compose=${encodeURIComponent(messageId)}`

@@ -18,6 +18,11 @@ export interface ProspectListItem {
   negotiated_value_cents: number | null
   payment_status: 'none' | 'invoiced' | 'partial' | 'paid'
   next_follow_up_date: string | null
+  first_contacted_at: string | null
+  last_contacted_at: string | null
+  last_reply_at: string | null
+  negotiation_notes: string | null
+  outcome_note: string | null
   renewal_date: string | null
   tags: string[]
   contact_count: number
@@ -177,6 +182,7 @@ export interface PitchView {
   versions: { id: number; version: number; channel: string; status: string; generator: string; created_at: string }[]
   sendingAvailable: false
   gmail: PitchGmail | null
+  send: { id: number; status: string; sent_at: string | null; origin: string } | null
 }
 
 export interface PitchSummary {
@@ -311,7 +317,7 @@ export interface GmailVerification {
 }
 
 export interface GmailDraftView {
-  id: number; kind: 'pitch' | 'test'; status: 'creating' | 'created' | 'uncertain' | 'failed' | 'gone' | 'unlinked'; pitchId: number | null
+  id: number; kind: 'pitch' | 'test' | 'follow_up'; status: 'creating' | 'created' | 'uncertain' | 'failed' | 'gone' | 'unlinked' | 'sent'; pitchId: number | null
   recipient: string; subject: string | null; gmailDraftId: string | null; threadId: string | null; openUrl: string | null
   attachment: { filename: string | null; sha256: string | null; mediaKitId: number | null }
   verification: GmailVerification | null; editedInGmail: boolean; outOfDate: boolean
@@ -333,8 +339,8 @@ export interface GmailStatus {
   secretStorage: string
   redirectUri: string
   requestedScopes: string[]
-  account: { email: string; status: 'connected' | 'needs_reconnect'; scopes: string[]; connectedAt: string; lastCheckedAt: string | null; lastError: string | null } | null
-  sendingEnabled: false
+  account: { email: string; status: 'connected' | 'needs_reconnect'; scopes: string[]; missingScopes: string[]; readAccess: boolean; connectedAt: string; lastCheckedAt: string | null; lastError: string | null } | null
+  liveSendingEnabled: boolean
   drafts: Record<string, number>
   lastSyncAt: string | null
 }

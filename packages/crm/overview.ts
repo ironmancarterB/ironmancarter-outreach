@@ -4,12 +4,14 @@ import { ACTIVE_DEAL_STAGES, STAGES } from '../core/stages'
 import { paidSpendThisMonth } from '../ai/router'
 import { getDefaultMediaKit } from '../mediakit/store'
 import { contactEligibility, type Contact, type Prospect } from './prospects'
+import { limitsStatus } from '../outreach/send'
 
 export function overview(db: DB, now = new Date()) {
   const tierSlug = getSetting<string>(db, 'outreach.sendingTier')
   const tier = get<{ slug: string; name: string; daily_limit: number; weekly_limit: number }>(db, 'SELECT * FROM sending_tiers WHERE slug = ?', tierSlug)!
   const autopilot = getSetting<boolean>(db, 'outreach.autopilotEnabled')
   const liveSending = getSetting<boolean>(db, 'outreach.liveSendingEnabled')
+  const limits = limitsStatus(db, now)
 
   const stageCounts = Object.fromEntries(STAGES.map((s) => [s.id, 0])) as Record<string, number>
   for (const r of all<{ stage: string; n: number }>(db, 'SELECT stage, count(*) AS n FROM prospects GROUP BY stage')) stageCounts[r.stage] = r.n
@@ -42,11 +44,11 @@ export function overview(db: DB, now = new Date()) {
       liveSendingEnabled: liveSending,
       mode: getSetting<string>(db, 'outreach.mode'),
       tier,
-      // No sending code exists yet (Phase 5), so these are genuinely zero.
-      sentToday: 0,
-      sentThisWeek: 0,
-      remainingToday: autopilot && liveSending ? tier.daily_limit : 0,
-      remainingThisWeek: autopilot && liveSending ? tier.weekly_limit : 0,
+      // Counted from the send records (manual sends only; autopilot does not exist).
+      sentToday: limits.total.sent,
+      sentThisWeek: limits.weekNew.sent,
+      remainingToday: liveSending ? Math.min(limits.newEmails.remaining, limits.total.remaining) : 0,
+      remainingThisWeek: liveSending ? limits.weekNew.remaining : 0,
     },
     prospects: {
       total: prospects.size,
@@ -59,7 +61,7 @@ export function overview(db: DB, now = new Date()) {
       pendingReview: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'pending'")!.n,
       approved: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'approved'")!.n,
     },
-    repliesNeedingAttention: 0,
+    repliesNeedingAttention: get<{ n: number }>(db, 'SELECT count(*) AS n FROM email_threads WHERE needs_review = 1')!.n,
     revenue: {
       contractedCents: money.won ?? 0,
       collectedCents: money.collected ?? 0,

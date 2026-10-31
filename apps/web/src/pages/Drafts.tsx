@@ -30,9 +30,9 @@ export default function Drafts({ tab }: { tab?: string }) {
     <>
       <PageHeader title="Email Drafts" subtitle="Personalized pitches built from verified research. Draft mode only: nothing here can be sent." />
       <div className="mb-5">
-        <Notice tone="green" title="Nothing here can be sent">
-          There is no send button and no sending code. Approved email pitches can become Gmail drafts (open a pitch → Gmail draft); approval is not
-          permission to send, and sending waits for Phase 5 and your explicit approval. Manual submissions are always made by you on the brand's own site.
+        <Notice tone="green" title="Approval is not permission to send">
+          Approved email pitches become Gmail drafts (open a pitch → Gmail draft). Each email is sent only from Outreach → Sending queue, one at a time,
+          after you review and confirm it. Manual submissions are always made by you on the brand's own site.
         </Notice>
       </div>
       <Tabs tabs={TABS.map((t) => ({ ...t, label: counts[t.id] != null ? `${t.label} (${counts[t.id]})` : t.label }))} value={current} onChange={(t) => navigate(`/drafts/${t}`)} />

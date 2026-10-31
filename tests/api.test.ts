@@ -30,8 +30,8 @@ describe('local-only API guard', () => {
     const r = await app.inject({ method: 'GET', url: '/api/health', headers: { host: 'evil.example.com' } })
     expect(r.statusCode).toBe(403)
   })
-  it('reports that no sending code is present', async () => {
-    expect((await app.inject({ url: '/api/health', headers: H })).json()).toEqual({ ok: true, sendingCodePresent: false })
+  it('reports that live sending and autopilot are off', async () => {
+    expect((await app.inject({ url: '/api/health', headers: H })).json()).toEqual({ ok: true, sendingCodePresent: true, liveSendingEnabled: false, autopilot: false, emergencyStop: false })
   })
 })
 
@@ -166,7 +166,7 @@ describe('pitch endpoints (draft mode)', () => {
     const view = r.json()
     expect(view).toMatchObject({ sendingAvailable: false, pitch: { status: 'draft', channel: 'email' } })
     expect(view.recipient.email).toBe('partnerships@brand.test')
-    for (const path of [`/api/pitches/${view.pitch.id}/send`, '/api/send', '/api/outreach/send']) {
+    for (const path of [`/api/pitches/${view.pitch.id}/send`, '/api/send', '/api/outreach/send', '/api/outreach/send-all']) {
       expect((await post(path, {})).statusCode).toBe(404)
     }
   })

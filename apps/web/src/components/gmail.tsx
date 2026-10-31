@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { relative } from '../lib/format'
 import type { GmailDraftView, GmailVerification, PitchView } from '../lib/types'
 import { Badge, Button, Card, Notice, useToast } from './ui'
+import { SendDialog } from './send'
 
 const STATUS: Record<GmailDraftView['status'], { label: string; tone: 'green' | 'amber' | 'red' | 'gray' | 'blue' }> = {
   creating: { label: 'Creating…', tone: 'blue' },
@@ -12,6 +13,7 @@ const STATUS: Record<GmailDraftView['status'], { label: string; tone: 'green' | 
   failed: { label: 'Not created', tone: 'red' },
   gone: { label: 'No longer in Gmail drafts', tone: 'gray' },
   unlinked: { label: 'Unlinked', tone: 'gray' },
+  sent: { label: 'Sent', tone: 'green' },
 }
 
 export function GmailStatusBadge({ draft }: { draft: GmailDraftView | null | undefined }) {
@@ -44,6 +46,7 @@ export function Verification({ v }: { v: GmailVerification | null }) {
 export function GmailPanel({ view, onChange }: { view: PitchView; onChange: (v: PitchView) => void }) {
   const toast = useToast()
   const [busy, setBusy] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
   const g = view.gmail
   const p = view.pitch
   if (!g || p.channel !== 'email') return null
@@ -89,9 +92,17 @@ export function GmailPanel({ view, onChange }: { view: PitchView; onChange: (v: 
 
   const live = d && ['created', 'uncertain', 'creating'].includes(d.status)
   const forThisVersion = d?.pitchId === p.id
+  const sent = view.send && ['sent', 'sending', 'uncertain'].includes(view.send.status) ? view.send : null
+  const reload = async () => onChange(await api.get<PitchView>(`/api/pitches/${p.id}`))
   return (
-    <Card title="Gmail draft" actions={<GmailStatusBadge draft={live ? d : null} />}>
+    <Card title="Gmail draft" actions={sent ? <Badge tone={sent.status === 'sent' ? 'green' : 'amber'}>{sent.status === 'sent' ? 'Sent' : 'Send status uncertain'}</Badge> : <GmailStatusBadge draft={live ? d : null} />}>
       <div className="space-y-3 text-sm">
+        {sent && (
+          <Notice tone={sent.status === 'sent' ? 'green' : 'amber'} title={sent.status === 'sent' ? `Sent${sent.sent_at ? ` ${relative(sent.sent_at)}` : ''}${sent.origin === 'gmail' ? ' by you from Gmail' : ''}` : 'Send status uncertain'}>
+            {sent.status === 'sent' ? 'Replies and follow-ups are tracked in Outreach.' : 'It was not retried. Reconcile it in Outreach → Sent before doing anything else.'}{' '}
+            <a className="underline" href={sent.status === 'sent' ? '#/outreach/conversations' : '#/outreach/sent'}>Open Outreach</a>
+          </Notice>
+        )}
         {!g.connected ? (
           <Notice tone="amber">Gmail is not connected. <a className="underline" href="#/settings/gmail">Connect it in Settings → Gmail</a>.</Notice>
         ) : p.status !== 'approved' && !live ? (
@@ -124,10 +135,12 @@ export function GmailPanel({ view, onChange }: { view: PitchView; onChange: (v: 
           {g.connected && d?.status === 'created' && <Button size="sm" onClick={verify} disabled={busy !== null}>{busy === 'verify' ? 'Checking…' : 'Re-check in Gmail'}</Button>}
           {g.connected && d?.status === 'uncertain' && <Button size="sm" variant="primary" onClick={check} disabled={busy !== null}>{busy === 'check' ? 'Checking…' : 'Check Gmail'}</Button>}
           {d?.status === 'uncertain' && /not found/.test(d.note ?? '') && <Button size="sm" onClick={notCreated} disabled={busy !== null}>It was not created</Button>}
+          {g.connected && !sent && d?.status === 'created' && p.status === 'approved' && !d.outOfDate && !d.editedInGmail && <Button size="sm" variant="secondary" onClick={() => setSending(true)}>Review &amp; send…</Button>}
           {d?.status === 'created' && <Button size="sm" variant="ghost" onClick={unlink} disabled={busy !== null}>Unlink</Button>}
         </div>
-        <p className="text-xs text-zinc-500">The app can create and update drafts but cannot send them. Sending stays disabled until Phase 5 and your explicit approval.</p>
+        <p className="text-xs text-zinc-500">Approval is not permission to send. Sending happens only from the review dialog, one email at a time, after every safeguard passes and you confirm.</p>
       </div>
+      <SendDialog target={sending ? { pitchId: p.id } : null} title={`Send first email to ${view.company.name}`} onClose={() => setSending(false)} onSent={reload} />
     </Card>
   )
 }

@@ -20,11 +20,12 @@ import { boundaryFor, boundaryOf, buildMessage, parseMessage, sha256 } from './m
 
 export interface DraftRow {
   id: number
-  kind: 'pitch' | 'test'
+  kind: 'pitch' | 'test' | 'follow_up'
   pitch_id: number | null
+  follow_up_id: number | null
   prospect_id: number | null
   account_id: number
-  status: 'creating' | 'created' | 'uncertain' | 'failed' | 'gone' | 'unlinked'
+  status: 'creating' | 'created' | 'uncertain' | 'failed' | 'gone' | 'unlinked' | 'sent'
   local_ref: string
   rfc822_message_id: string
   gmail_draft_id: string | null
@@ -89,13 +90,23 @@ function loadDefaultKit(db: DB, dataDir: string, expectedKitId: number | null): 
   return { kit, data, sha }
 }
 
-const contentHash = (to: string, subject: string, body: string, kitSha: string) => sha256(JSON.stringify([to.toLowerCase(), subject, body, kitSha]))
+export const contentHash = (to: string, subject: string, body: string, kitSha: string | null) => sha256(JSON.stringify([to.toLowerCase(), subject, body, kitSha ?? 'none']))
 
-function buildRaw(db: DB, account: { email: string }, m: { to: string; subject: string; body: string; ref: string }, kit: LoadedKit) {
+export const OPT_OUT_LINE = 'Prefer not to hear from me? Reply "unsubscribe" and I won\u2019t email you again.'
+
+// Commercial email footer (CAN-SPAM): your postal address and a way to opt out. Added to every pitch and
+// follow-up draft; sending is blocked while the postal address is missing.
+export function composeBody(db: DB, kind: DraftRow['kind'], body: string) {
+  if (kind === 'test') return body
+  const address = getSetting<string>(db, 'business.postalAddress').trim()
+  return [body.trimEnd(), '', '--', ...(address ? [address] : []), OPT_OUT_LINE].join('\n')
+}
+
+function buildRaw(db: DB, account: { email: string }, m: { to: string; subject: string; body: string; ref: string; headers?: Record<string, string> }, kit: LoadedKit | null) {
   return buildMessage({
     from: { name: getSetting<string>(db, 'business.creatorName'), email: account.email },
-    to: m.to, subject: m.subject, body: m.body, boundary: boundaryFor(m.ref),
-    attachment: { filename: kit.kit.original_filename, mimeType: 'application/pdf', data: kit.data },
+    to: m.to, subject: m.subject, body: m.body, boundary: boundaryFor(m.ref), headers: m.headers,
+    attachment: kit ? { filename: kit.kit.original_filename, mimeType: 'application/pdf', data: kit.data } : undefined,
   })
 }
 
@@ -132,7 +143,9 @@ export async function verifyDraft(db: DB, deps: GmailDeps, rowId: number, expect
     { label: 'Recipient', ok: (parsed.headers.to ?? '').toLowerCase().includes(row.recipient.toLowerCase()), detail: parsed.headers.to ?? 'missing' },
     { label: 'Subject', ok: (parsed.headers.subject ?? '') === (row.subject ?? ''), detail: parsed.headers.subject ?? 'missing' },
     { label: 'Sender', ok: (parsed.headers.from ?? '').toLowerCase().includes(account.email), detail: parsed.headers.from ?? 'missing' },
-    { label: 'Exactly one attachment', ok: pdfs.length === 1, detail: `${pdfs.length} found` },
+    row.attachment_sha256
+      ? { label: 'Exactly one attachment', ok: pdfs.length === 1, detail: `${pdfs.length} found` }
+      : { label: 'No attachment (follow-up)', ok: pdfs.length === 0, detail: `${pdfs.length} found` },
   ]
   if (expectedBody !== undefined) checks.push({ label: 'Body matches what the app wrote', ok: !!text && norm(text.data.toString('utf8')) === norm(expectedBody), detail: text ? `${text.data.length} bytes` : 'no text part' })
   if (pdf) {
@@ -151,28 +164,32 @@ export async function verifyDraft(db: DB, deps: GmailDeps, rowId: number, expect
     JSON.stringify(result), result.ok ? result.checkedAt : null, draft.message.id, gmailMessageIdHeader, nowIso(), nowIso(), row.id)
   run(db, "UPDATE email_messages SET rfc822_message_id = ? WHERE draft_row_id = ? AND kind = 'draft'", gmailMessageIdHeader, row.id)
   logActivity(db, result.ok ? 'gmail.draft_verified' : 'gmail.draft_verify_failed',
-    result.ok ? `Verified the Gmail draft to ${row.recipient}: recipient, subject and media kit v${kit?.version} attachment match byte for byte`
+    result.ok ? `Verified the Gmail draft to ${row.recipient}: recipient, subject${kit ? ` and media kit v${kit.version} attachment match byte for byte` : ' and body match'}`
       : `Gmail draft to ${row.recipient} failed verification: ${checks.filter((c) => !c.ok).map((c) => c.label).join(', ')}`, { prospectId: row.prospect_id })
   return result
 }
 
 // ---------- Create ----------
 
-interface CreateInput {
+export interface CreateInput {
   kind: DraftRow['kind']
   pitchId: number | null
   prospectId: number | null
+  followUpId?: number | null
   to: string
   subject: string
-  body: string
+  body: string                      // final text, including the compliance footer
   kitId: number | null
+  attachKit?: boolean               // default true; follow-ups go without the attachment
+  threadId?: string | null          // reply in an existing Gmail thread (follow-ups)
+  headers?: Record<string, string>  // In-Reply-To / References for follow-ups
 }
 
-async function createDraft(db: DB, deps: GmailDeps, dataDir: string, input: CreateInput) {
+export async function createDraft(db: DB, deps: GmailDeps, dataDir: string, input: CreateInput) {
   const { account, token } = await accessToken(db, deps)
-  const kit = loadDefaultKit(db, dataDir, input.kitId)
+  const kit = input.attachKit === false ? null : loadDefaultKit(db, dataDir, input.kitId)
   const ref = randomUUID()
-  const raw = buildRaw(db, account, { to: input.to, subject: input.subject, body: input.body, ref }, kit)
+  const raw = buildRaw(db, account, { to: input.to, subject: input.subject, body: input.body, ref, headers: input.headers }, kit)
   if (raw.length > 30 * 1024 * 1024) throw new AppError(409, 'too_large', 'The message with its attachment is larger than Gmail accepts.')
 
   const { rowId, op } = tx(db, () => {
@@ -180,20 +197,23 @@ async function createDraft(db: DB, deps: GmailDeps, dataDir: string, input: Crea
       throw new AppError(409, 'duplicate', 'A Gmail draft already exists for this pitch.')
     }
     if (input.prospectId && liveForCompany(db, input.prospectId)) throw new AppError(409, 'duplicate', 'This company already has a Gmail draft. Update it instead of creating another.')
+    if (input.followUpId && get(db, `SELECT 1 FROM gmail_drafts WHERE follow_up_id = ? AND status IN ${LIVE}`, input.followUpId)) {
+      throw new AppError(409, 'duplicate', 'This follow-up already has a Gmail draft.')
+    }
     if (input.kind === 'test' && get(db, `SELECT 1 FROM gmail_drafts WHERE kind = 'test' AND status IN ${LIVE}`)) {
       throw new AppError(409, 'duplicate', 'A test draft already exists. Delete it in Gmail, then press "Sync with Gmail" before making another.')
     }
     const now = nowIso()
-    const rowId = run(db, `INSERT INTO gmail_drafts (kind, pitch_id, prospect_id, account_id, status, local_ref, rfc822_message_id, recipient, subject, content_sha256,
-      media_kit_id, attachment_filename, attachment_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, 'creating', ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      input.kind, input.pitchId, input.prospectId, account.id, ref, input.to, input.subject, contentHash(input.to, input.subject, input.body, kit.sha),
-      kit.kit.id, kit.kit.original_filename, kit.sha, now, now).lastId
+    const rowId = run(db, `INSERT INTO gmail_drafts (kind, pitch_id, follow_up_id, prospect_id, account_id, status, local_ref, rfc822_message_id, recipient, subject, content_sha256,
+      media_kit_id, attachment_filename, attachment_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'creating', ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      input.kind, input.pitchId, input.followUpId ?? null, input.prospectId, account.id, ref, input.to, input.subject, contentHash(input.to, input.subject, input.body, kit?.sha ?? null),
+      kit?.kit.id ?? null, kit?.kit.original_filename ?? null, kit?.sha ?? null, now, now).lastId
     return { rowId, op: opStart(db, 'create_draft', account.id, rowId, `${raw.length.toLocaleString('en-US')} bytes to ${input.to}`) }
   })
 
   let draft: GmailDraft
   try {
-    draft = await deps.api.createDraft(token, raw)
+    draft = input.threadId ? await deps.api.createDraftInThread(token, raw, input.threadId) : await deps.api.createDraft(token, raw)
   } catch (err) {
     opFail(db, op, err)
     const unknown = !(err instanceof GoogleError) || err.outcome === 'unknown'
@@ -213,7 +233,7 @@ async function createDraft(db: DB, deps: GmailDeps, dataDir: string, input: Crea
       draft.id, draft.message.id, draft.message.threadId, nowIso(), nowIso(), rowId)
     opFinish(db, op, 'ok', `draft ${draft.id}, message ${draft.message.id}`)
     recordThread(db, getDraftRow(db, rowId))
-    logActivity(db, 'gmail.draft_created', `Created a Gmail draft to ${input.to} with media kit v${kit.kit.version} attached. Nothing was sent.`, { prospectId: input.prospectId, data: { draftId: draft.id } })
+    logActivity(db, 'gmail.draft_created', `Created a Gmail ${input.kind === 'follow_up' ? 'follow-up ' : ''}draft to ${input.to}${kit ? ` with media kit v${kit.kit.version} attached` : ''}. Nothing was sent.`, { prospectId: input.prospectId, data: { draftId: draft.id } })
   })
   await verifyDraft(db, deps, rowId, input.body).catch(() => null)
   return getDraftRow(db, rowId)
@@ -224,14 +244,15 @@ function recordThread(db: DB, row: DraftRow) {
   if (!row.gmail_thread_id || !row.gmail_message_id) return
   const now = nowIso()
   run(db, `INSERT INTO email_threads (account_id, prospect_id, gmail_thread_id, subject, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?)
-    ON CONFLICT(account_id, gmail_thread_id) DO UPDATE SET subject = excluded.subject, updated_at = excluded.updated_at`,
+    ON CONFLICT(account_id, gmail_thread_id) DO UPDATE SET subject = CASE WHEN email_threads.status = 'draft' THEN excluded.subject ELSE email_threads.subject END,
+      updated_at = excluded.updated_at`,
     row.account_id, row.prospect_id, row.gmail_thread_id, row.subject, now, now)
   const thread = get<{ id: number }>(db, 'SELECT id FROM email_threads WHERE account_id = ? AND gmail_thread_id = ?', row.account_id, row.gmail_thread_id)!
   const existing = get<{ id: number }>(db, "SELECT id FROM email_messages WHERE draft_row_id = ? AND kind = 'draft'", row.id)
   if (existing) {
     run(db, 'UPDATE email_messages SET gmail_message_id = ?, thread_id = ?, subject = ? WHERE id = ?', row.gmail_message_id, thread.id, row.subject, existing.id)
   } else {
-    run(db, `INSERT INTO email_messages (thread_id, gmail_message_id, rfc822_message_id, direction, kind, draft_row_id, from_email, to_email, subject, created_at)
+    run(db, `INSERT OR IGNORE INTO email_messages (thread_id, gmail_message_id, rfc822_message_id, direction, kind, draft_row_id, from_email, to_email, subject, created_at)
       SELECT ?, ?, ?, 'outbound', 'draft', ?, email, ?, ?, ? FROM mail_accounts WHERE id = ?`,
       thread.id, row.gmail_message_id, row.rfc822_message_id, row.id, row.recipient, row.subject, now, row.account_id)
   }
@@ -258,7 +279,7 @@ export async function createPitchDraft(db: DB, deps: GmailDeps, dataDir: string,
       ? 'An earlier attempt for this company has an uncertain result. Use "Check Gmail" first.'
       : 'This company already has a Gmail draft. Use "Update Gmail draft" instead.')
   }
-  return createDraft(db, deps, dataDir, { kind: 'pitch', pitchId: p.id, prospectId: p.prospect_id, to: p.recipient_email!, subject: p.subject!, body: p.body, kitId: p.media_kit_id })
+  return createDraft(db, deps, dataDir, { kind: 'pitch', pitchId: p.id, prospectId: p.prospect_id, to: p.recipient_email!, subject: p.subject!, body: composeBody(db, 'pitch', p.body), kitId: p.media_kit_id })
 }
 
 // A draft addressed to your own Gmail account, to test the connection and attachment without touching any prospect.
@@ -288,7 +309,8 @@ export async function updatePitchDraft(db: DB, deps: GmailDeps, dataDir: string,
   }
   const { account, token } = await accessToken(db, deps)
   const kit = loadDefaultKit(db, dataDir, p.media_kit_id)
-  const raw = buildRaw(db, account, { to: p.recipient_email!, subject: p.subject!, body: p.body, ref: row.local_ref }, kit)
+  const fullBody = composeBody(db, 'pitch', p.body)
+  const raw = buildRaw(db, account, { to: p.recipient_email!, subject: p.subject!, body: fullBody, ref: row.local_ref }, kit)
   const op = opStart(db, 'update_draft', account.id, row.id, `pitch v${p.version}`)
   let draft: GmailDraft
   try {
@@ -305,13 +327,13 @@ export async function updatePitchDraft(db: DB, deps: GmailDeps, dataDir: string,
   tx(db, () => {
     run(db, `UPDATE gmail_drafts SET pitch_id = ?, recipient = ?, subject = ?, content_sha256 = ?, media_kit_id = ?, attachment_filename = ?, attachment_sha256 = ?,
       gmail_message_id = ?, gmail_thread_id = ?, edited_in_gmail = 0, attachment_check = NULL, attachment_verified_at = NULL, sync_note = NULL, last_synced_at = ?, updated_at = ? WHERE id = ?`,
-      p.id, p.recipient_email, p.subject, contentHash(p.recipient_email!, p.subject!, p.body, kit.sha), kit.kit.id, kit.kit.original_filename, kit.sha,
+      p.id, p.recipient_email, p.subject, contentHash(p.recipient_email!, p.subject!, fullBody, kit.sha), kit.kit.id, kit.kit.original_filename, kit.sha,
       draft.message.id, draft.message.threadId, nowIso(), nowIso(), row.id)
     opFinish(db, op, 'ok', `message ${draft.message.id}`)
     recordThread(db, getDraftRow(db, row.id))
     logActivity(db, 'gmail.draft_updated', `Updated the Gmail draft to ${p.recipient_email} with pitch v${p.version}. Nothing was sent.`, { prospectId: p.prospect_id })
   })
-  await verifyDraft(db, deps, row.id, p.body).catch(() => null)
+  await verifyDraft(db, deps, row.id, fullBody).catch(() => null)
   return getDraftRow(db, row.id)
 }
 
@@ -319,7 +341,7 @@ export async function updatePitchDraft(db: DB, deps: GmailDeps, dataDir: string,
 
 function markGone(db: DB, row: DraftRow) {
   run(db, "UPDATE gmail_drafts SET status = 'gone', sync_note = ?, last_synced_at = ?, updated_at = ? WHERE id = ?",
-    'No longer in Gmail drafts: it was sent or deleted from Gmail. (Sent Mail is checked from Phase 5, which needs read access.)', nowIso(), nowIso(), row.id)
+    'No longer in Gmail drafts: it was sent or deleted from Gmail. "Check Gmail for replies" looks in Sent Mail to tell which.', nowIso(), nowIso(), row.id)
   logActivity(db, 'gmail.draft_gone', `The Gmail draft to ${row.recipient} is no longer in Gmail drafts (sent or deleted in Gmail)`, { prospectId: row.prospect_id })
 }
 
@@ -438,7 +460,7 @@ export function gmailForPitch(db: DB, dataDir: string, pitchId: number) {
   const kit = getDefaultMediaKit(db)
   if (p.recipient_email && p.subject && kit) {
     const path = mediaKitFilePath(dataDir, kit)
-    currentHash = existsSync(path) ? contentHash(p.recipient_email, p.subject, p.body, kit.sha256) : null
+    currentHash = existsSync(path) ? contentHash(p.recipient_email, p.subject, composeBody(db, 'pitch', p.body), kit.sha256) : null
   }
   return {
     connected: account?.status === 'connected',

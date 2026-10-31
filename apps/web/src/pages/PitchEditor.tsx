@@ -70,7 +70,7 @@ export default function PitchEditor({ id }: { id: number }) {
       {p.status === 'superseded' && <Notice tone="amber">This is an older version. A newer one exists for this company.</Notice>}
       {p.status === 'rejected' && <Notice tone="red" title="Rejected">{p.reject_reason}</Notice>}
       {p.status === 'approved' && <Notice tone="green" title={`Approved ${p.reviewed_at ? relative(p.reviewed_at) : ''}`}>
-        {p.channel === 'email' ? 'You can now create a Gmail draft of it in the Gmail draft panel. Approval is not permission to send: nothing is sent until Phase 5 and your explicit approval of live sending.' : 'Ready for you to submit on the brand\'s site (Manual submissions tab).'}
+        {p.channel === 'email' ? 'You can now create a Gmail draft of it in the Gmail draft panel. Approval is not permission to send: each email is sent only after you review and confirm it in the send dialog.' : 'Ready for you to submit on the brand\'s site (Manual submissions tab).'}
       </Notice>}
 
       <div className="grid gap-5 xl:grid-cols-[1fr_26rem]">
@@ -83,7 +83,7 @@ export default function PitchEditor({ id }: { id: number }) {
                 <Textarea className="min-h-[22rem] font-[inherit] leading-relaxed" value={body} onChange={(e) => setBody(e.target.value)} disabled={!editable} />
               </Field>
               {p.channel === 'email' && <Attachment view={data} />}
-              <p className="text-xs text-zinc-500">When sending exists (Phase 5), your postal address and an opt-out line are added below the signature automatically.</p>
+              <p className="text-xs text-zinc-500">The Gmail draft adds your postal address and an opt-out line below the signature (required before sending).</p>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-zinc-500">{p.generator === 'ollama' ? `Local AI (${p.ai_model})` : 'Template'} · v{p.version} · {dateTime(p.created_at)}{p.edited ? ' · edited by you' : ''}</span>
                 <div className="ml-auto flex flex-wrap gap-2">

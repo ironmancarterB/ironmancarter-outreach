@@ -72,7 +72,7 @@ describe('CRM records', () => {
   it('does not allow approving for autopilot by hand', () => {
     const db = freshDb()
     const p = brand(db)
-    expect(() => setStage(db, p.id, 'approved_autopilot')).toThrow(/approval gate/)
+    expect(() => setStage(db, p.id, 'approved_autopilot')).toThrow(/Autopilot is not available/)
   })
 
   it('suppresses every address when a company opts out', () => {

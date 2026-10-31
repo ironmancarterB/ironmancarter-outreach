@@ -39,6 +39,8 @@ import {
 import { GoogleApi } from '../../../packages/gmail/google'
 import { defaultSecretStore, memoryStore } from '../../../packages/gmail/secrets'
 import { config } from './config'
+import { afterCrmChange, outreachRoutes } from './outreachRoutes'
+import { recoverInterruptedSends } from '../../../packages/outreach/send'
 import { LOCKED, VALIDATORS, validateSetting } from './settingsPolicy'
 
 export interface AppOptions {
@@ -85,6 +87,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   }
   const dashboardUrl = opts.dashboardUrl ?? `http://localhost:${config.production ? config.port : config.webPort}`
   recoverInterrupted(db)
+  recoverInterruptedSends(db)
   await app.register(multipart, { limits: { fileSize: MAX_MEDIA_KIT_BYTES + 1, files: 1, fields: 10 } })
 
   // Local-only guard. Rejects requests addressed to another host name (DNS rebinding) and requires a
@@ -112,7 +115,16 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   })
 
   // ---------- System ----------
-  app.get('/api/health', async () => ({ ok: true, sendingCodePresent: false }))
+  // Sending code exists (manual, confirmed sends only); whether it may be used is liveSendingEnabled.
+  app.get('/api/health', async () => ({
+    ok: true, sendingCodePresent: true, liveSendingEnabled: getSetting<boolean>(db, 'outreach.liveSendingEnabled'), autopilot: false,
+    emergencyStop: getSetting<{ active: boolean }>(db, 'outreach.emergencyStop').active,
+  }))
+
+  // CRM changes (suppressions, stages, reviews) can end follow-ups; re-check them after every such write.
+  app.addHook('onResponse', async (req) => {
+    if (req.method !== 'GET' && /^\/api\/(prospects|suppressions|import)/.test(req.url)) afterCrmChange(db)
+  })
   app.get('/api/overview', async () => overview(db))
   app.get('/api/activity', async (req) => {
     const limit = Math.min(500, Math.max(1, Number((req.query as Body).limit ?? 100) || 100))
@@ -288,7 +300,11 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     setProgramTypeOverride(db, id((req.params as Body).id), typeof v === 'string' ? v : null)
     return { ok: true }
   })
-  const pitchWithGmail = (pid: number) => ({ ...pitchView(db, dataDir, pid), gmail: gmailForPitch(db, dataDir, pid) })
+  const pitchWithGmail = (pid: number) => {
+    const view = pitchView(db, dataDir, pid)
+    const send = get(db, "SELECT id, status, sent_at, origin FROM send_attempts WHERE prospect_id = ? AND kind = 'initial' ORDER BY id DESC LIMIT 1", view.pitch.prospect_id) ?? null
+    return { ...view, gmail: gmailForPitch(db, dataDir, pid), send }
+  }
   app.get('/api/pitches/:id', async (req) => pitchWithGmail(id((req.params as Body).id)))
   app.patch('/api/pitches/:id', async (req) => {
     const b = (req.body ?? {}) as Body
@@ -490,6 +506,8 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     await updatePitchDraft(db, gmail, dataDir, pid, { overwriteGmailEdits: ((req.body ?? {}) as Body).overwriteGmailEdits === true })
     return pitchWithGmail(pid)
   })
+
+  outreachRoutes(app, { db, gmail, dataDir, aiDeps: opts.aiDeps })
 
   // ---------- Dashboard (production build) ----------
   if (opts.webDist && existsSync(opts.webDist)) {

@@ -17,15 +17,15 @@ export default function Overview() {
       <PageHeader title="Overview" subtitle="Every number here comes from data stored in this app." />
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Autopilot" value={o.autopilotEnabled ? 'On' : 'Off'} tone={o.autopilotEnabled ? 'good' : 'muted'}
-          hint={o.liveSendingEnabled ? 'Live sending enabled' : 'Live sending disabled'} />
+        <Stat label="Sending mode" value={o.liveSendingEnabled ? 'Manual (live)' : 'Off'} tone={o.liveSendingEnabled ? 'warn' : 'muted'}
+          hint="Autopilot is not available; you confirm every email" />
         <Stat label="Sending tier" value={o.tier.name} hint={`${o.tier.daily_limit}/day · ${o.tier.weekly_limit}/week (upper bounds)`} />
         <Stat label="Emails sent" value={`${o.sentToday} today`} hint={`${o.sentThisWeek} this week`} />
-        <Stat label="Remaining capacity" value={`${o.remainingToday} today`} hint={o.autopilotEnabled ? `${o.remainingThisWeek} this week` : 'Zero while autopilot is off'} />
+        <Stat label="Remaining capacity" value={`${o.remainingToday} today`} hint={o.liveSendingEnabled ? `${o.remainingThisWeek} new this week. Ceilings, not targets` : 'Zero while live sending is off'} />
         <Stat label="Verified prospects available" value={p.verifiedAvailable}
           hint={<><a className="text-brand-600 hover:underline" href="#/discovery/review">{p.pendingReview} awaiting your review</a> · {p.needsReview} contacts need review · {p.manualContactQueue} form only</>} />
-        <Stat label="Replies needing attention" value={data.repliesNeedingAttention} hint="Reply monitoring arrives in Phase 5" />
-        <Stat label="Follow-ups scheduled" value={p.followUpsScheduled} hint="Manual reminders for now" />
+        <Stat label="Replies needing attention" value={data.repliesNeedingAttention} hint="Conversations flagged for your review" />
+        <Stat label="Follow-ups scheduled" value={p.followUpsScheduled} hint="Your reminder dates" />
         <Stat label="Active negotiations" value={p.activeNegotiations} hint="Replied, negotiating or proposal sent" />
       </div>
 

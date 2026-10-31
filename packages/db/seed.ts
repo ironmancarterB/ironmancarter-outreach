@@ -14,7 +14,7 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   'business.revenueGoalMonthlyUsd': 30000,
   'business.sponsorshipMilestonesUsd': [1000, 3000, 5000, 10000],
 
-  // Outreach is locked down by default. Phase 1 has no sending code at all.
+  // Outreach is locked down by default. Live sending is off until you enable it through the activation step.
   'outreach.mode': 'research_only',
   'outreach.autopilotEnabled': false,
   'outreach.liveSendingEnabled': false,
@@ -23,6 +23,12 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   'outreach.followUps': { enabled: false, firstAfterBusinessDays: 5, secondAfterBusinessDays: 12, max: 2 },
   'outreach.researchFreshnessDays': 90,
   'outreach.autoEligibleJurisdictions': ['US'],
+  // Safety ceilings for manual sending (never targets; unused capacity is never filled automatically).
+  // Days skipped when counting business days for follow-ups (YYYY-MM-DD).
+  'outreach.holidays': [],
+  'outreach.dailyLimits': { newPerDay: 10, followUpsPerDay: 5, totalPerDay: 15 },
+  // STOP ALL OUTREACH. While active, no send can start.
+  'outreach.emergencyStop': { active: false, at: null, reason: null },
 
   'gmail.expectedAccount': BUSINESS_EMAIL,
 

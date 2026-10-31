@@ -4,7 +4,7 @@
 import { randomBytes } from 'node:crypto'
 import { get, getSetting, logActivity, nowIso, run, type DB } from '../db'
 import { AppError, invalid } from '../core/errors'
-import { authUrl, GMAIL_SCOPES, GoogleApi, GoogleError, newPkce, type OAuthClient } from './google'
+import { authUrl, GMAIL_SCOPES, GoogleApi, GoogleError, newPkce, REQUIRED_SCOPES, SCOPE_READONLY, type OAuthClient } from './google'
 import type { SecretStore } from './secrets'
 
 export interface GmailDeps {
@@ -38,6 +38,17 @@ const accessTokens = new Map<number, { token: string; expiresAt: number }>()
 export const forgetAccessTokens = () => accessTokens.clear()
 
 export const activeAccount = (db: DB) => get<MailAccount>(db, "SELECT * FROM mail_accounts WHERE provider = 'gmail' AND status != 'disconnected'")
+
+export const grantedScopes = (account: Pick<MailAccount, 'scopes'>) => JSON.parse(account.scopes) as string[]
+export const missingScopes = (account: Pick<MailAccount, 'scopes'>) => GMAIL_SCOPES.filter((s) => !grantedScopes(account).includes(s))
+export const hasReadAccess = (account: Pick<MailAccount, 'scopes'> | undefined) => !!account && grantedScopes(account).includes(SCOPE_READONLY)
+
+// Reading replies and Sent Mail needs gmail.readonly, granted by reconnecting (Settings → Gmail).
+export function requireReadAccess(account: MailAccount) {
+  if (!hasReadAccess(account)) {
+    throw new AppError(409, 'needs_read_access', 'Reply tracking and sending need read access to Gmail. Reconnect Gmail in Settings → Gmail to grant it.')
+  }
+}
 
 // ---------- Audit trail of Gmail API calls ----------
 
@@ -105,13 +116,13 @@ export async function startConnect(db: DB, deps: GmailDeps) {
   if (!client) throw new AppError(409, 'no_client', 'Add your Google OAuth client first (step 1).')
   const expected = getSetting<string>(db, 'gmail.expectedAccount')
   const active = activeAccount(db)
-  if (active && active.status === 'connected' && active.email === expected) throw new AppError(409, 'connected', `Gmail is already connected as ${active.email}.`)
+  if (active && active.status === 'connected' && active.email === expected && !missingScopes(active).length) throw new AppError(409, 'connected', `Gmail is already connected as ${active.email}.`)
   if (active && active.email !== expected) throw new AppError(409, 'connected', `Disconnect ${active.email} before connecting ${expected}.`)
   for (const [k, v] of pending) if (v.expiresAt < Date.now()) pending.delete(k)
   const state = randomBytes(24).toString('base64url')
   const { verifier, challenge } = newPkce()
   pending.set(state, { verifier, expected, expiresAt: Date.now() + STATE_TTL_MS })
-  logActivity(db, 'gmail.connect_started', `Opened Google's consent page for ${expected} (scope: drafts only)`)
+  logActivity(db, 'gmail.connect_started', `Opened Google's consent page for ${expected} (permissions: ${GMAIL_SCOPES.map((x) => x.split('/').pop()).join(', ')})`)
   return { url: authUrl(client, { redirectUri: deps.redirectUri, state, challenge, loginHint: expected }), expected, scopes: GMAIL_SCOPES }
 }
 
@@ -144,8 +155,8 @@ export async function finishConnect(db: DB, deps: GmailDeps, query: Record<strin
     logActivity(db, 'gmail.connect_refused', why)
     throw new AppError(409, 'refused', why)
   }
-  if (!GMAIL_SCOPES.every((s) => granted.includes(s))) {
-    await discard('The "Manage drafts" permission was not granted, so the connection was discarded. Try again and leave that box ticked.')
+  if (!REQUIRED_SCOPES.every((s) => granted.includes(s))) {
+    await discard('The "Manage drafts and send email" permission was not granted, so the connection was discarded. Try again and leave that box ticked.')
   }
   const extra = granted.filter((s) => !(GMAIL_SCOPES as readonly string[]).includes(s) && !['openid', 'email', 'profile'].includes(s))
   if (extra.length) await discard(`Google granted permissions the app did not ask for (${extra.join(', ')}), so the connection was discarded.`)
@@ -172,7 +183,8 @@ export async function finishConnect(db: DB, deps: GmailDeps, query: Record<strin
   accessTokens.set(accountId, { token: tokens.access_token, expiresAt: tokens.expires_at })
   run(db, 'UPDATE gmail_operations SET account_id = ? WHERE id = ?', accountId, op)
   opFinish(db, op, 'ok', `Connected ${email} with ${granted.join(' ')}`)
-  logActivity(db, 'gmail.connected', `Connected Gmail ${email} (permission: manage drafts). Sending stays disabled.`)
+  const readAccess = granted.includes(SCOPE_READONLY)
+  logActivity(db, 'gmail.connected', `Connected Gmail ${email} (${readAccess ? 'drafts, sending a confirmed draft, and read access for reply tracking' : 'drafts only; read access was not granted'}). Live sending stays off until you enable it.`)
   return { email }
 }
 
@@ -246,9 +258,10 @@ export async function connectionStatus(db: DB, deps: GmailDeps) {
     redirectUri: deps.redirectUri,
     requestedScopes: GMAIL_SCOPES,
     account: account ? {
-      email: account.email, status: account.status, scopes: JSON.parse(account.scopes) as string[], connectedAt: account.connected_at,
+      email: account.email, status: account.status, scopes: grantedScopes(account), missingScopes: missingScopes(account), readAccess: hasReadAccess(account),
+      connectedAt: account.connected_at,
       lastCheckedAt: account.last_checked_at, lastError: account.last_error,
     } : null,
-    sendingEnabled: false,
+    liveSendingEnabled: getSetting<boolean>(db, 'outreach.liveSendingEnabled'),
   }
 }
