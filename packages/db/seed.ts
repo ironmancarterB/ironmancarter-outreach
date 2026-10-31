@@ -66,6 +66,15 @@ export const SENDING_TIERS = [
   { slug: 'established', name: 'Established', daily: 40, weekly: 200 },
 ]
 
+const PACKAGE_NOTE = 'Exploratory range, not a guaranteed market rate. Usage rights, paid ads, whitelisting and exclusivity are never included unless quoted separately.'
+
+export const PACKAGES = [
+  { slug: 'single-short', name: 'Single Sponsored Short', deliverables: 'one sponsored short-form video on YouTube Shorts, Instagram Reels or TikTok', min: 50000, max: 75000, unit: 'flat', recurring: false },
+  { slug: 'three-video', name: 'Three-Video Campaign', deliverables: 'three sponsored short-form videos across platforms', min: 135000, max: 200000, unit: 'flat', recurring: false },
+  { slug: 'monthly', name: 'Monthly Partnership', deliverables: 'recurring short-form integrations each month', min: 200000, max: 300000, unit: 'per_month', recurring: true },
+  { slug: 'three-month', name: 'Three-Month Partnership', deliverables: 'three months of recurring content with custom deliverables', min: null, max: null, unit: 'custom', recurring: true },
+]
+
 type Metric = {
   platform: string; key: string; label: string; value: number; unit?: string; approx?: boolean
   period?: string; start?: string; end?: string; asOf: string; source: string; notes?: string
@@ -126,6 +135,13 @@ export function seed(db: DB) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         m.platform, m.key, m.label, m.value, m.unit ?? 'count', m.approx ? 1 : 0, m.period ?? null, m.start ?? null,
         m.end ?? null, m.asOf, m.source, m.notes ?? null, now)
+    }
+    // Packages exist from migration 003 onward. Exploratory ranges from the brief, not market rates.
+    if (get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sponsorship_packages'")) {
+      PACKAGES.forEach((p, i) => {
+        run(db, `INSERT OR IGNORE INTO sponsorship_packages (slug, name, deliverables, price_min_cents, price_max_cents, price_unit, recurring, sort_order, notes, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.slug, p.name, p.deliverables, p.min, p.max, p.unit, p.recurring ? 1 : 0, i + 1, PACKAGE_NOTE, now)
+      })
     }
     // The candidate pool only exists from migration 002 onward.
     if (get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'candidate_pool'")) {

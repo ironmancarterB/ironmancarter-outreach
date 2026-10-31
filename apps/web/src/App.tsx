@@ -5,7 +5,9 @@ import Overview from './pages/Overview'
 import Discovery from './pages/Discovery'
 import Prospects from './pages/Prospects'
 import Autopilot from './pages/Autopilot'
-import { Drafts, FollowUps, ReplyInbox, SentEmails } from './pages/Upcoming'
+import { FollowUps, ReplyInbox, SentEmails } from './pages/Upcoming'
+import Drafts from './pages/Drafts'
+import PitchEditor from './pages/PitchEditor'
 import Deals from './pages/Deals'
 import Revenue from './pages/Revenue'
 import MediaKitPage from './pages/MediaKit'
@@ -64,7 +66,7 @@ export default function App() {
       case 'discovery': return <Discovery tab={parts[0]} openId={parts[1] ? Number(parts[1]) : null} />
       case 'prospects': return <Prospects openId={parts[0] ? Number(parts[0]) : null} />
       case 'autopilot': return <Autopilot />
-      case 'drafts': return <Drafts />
+      case 'drafts': return parts[0] === 'pitch' && parts[1] ? <PitchEditor id={Number(parts[1])} /> : <Drafts tab={parts[0]} />
       case 'sent': return <SentEmails />
       case 'replies': return <ReplyInbox />
       case 'follow-ups': return <FollowUps />

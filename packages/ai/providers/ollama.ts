@@ -28,6 +28,8 @@ export function ollamaProvider(cfg: OllamaConfig, fetchImpl: typeof fetch = fetc
         body: JSON.stringify({
           model,
           stream: false,
+          // Thinking models (e.g. gemma4) otherwise spend the whole token budget on hidden reasoning.
+          think: false,
           options: { num_predict: req.maxOutputTokens },
           messages: [...(req.system ? [{ role: 'system', content: req.system }] : []), { role: 'user', content: req.prompt }],
         }),

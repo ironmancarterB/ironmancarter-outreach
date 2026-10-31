@@ -117,6 +117,101 @@ export interface PoolEntry {
   in_crm: number
 }
 
+export type ProgramType = 'paid_sponsorship' | 'creator_partnerships' | 'affiliate_only' | 'unknown'
+
+export interface Flag { level: 'missing' | 'warning'; code: string; message: string }
+export interface Check { level: 'blocker' | 'warning'; code: string; message: string }
+
+export type ClaimSource =
+  | { type: 'research'; id: number; url: string; label: string; snippet: string | null; retrieved_at: string }
+  | { type: 'metric'; id: number; label: string; platform: string; value: number; period: string | null; as_of: string; source: string }
+  | { type: 'package'; id: number; name: string }
+  | { type: 'media_kit'; id: number; version: number }
+  | { type: 'creator'; note: string }
+  | { type: 'concept'; note: string }
+
+export interface Claim { sentence: string; kind: string; sources: ClaimSource[] }
+
+export interface PitchOptions {
+  channel: 'email' | 'manual_form'
+  contact_id?: number | null
+  package_id?: number | null
+  include_rates?: boolean
+  custom_rate_text?: string | null
+  custom_deliverables?: string | null
+  concept?: string | null
+}
+
+export interface Package {
+  id: number
+  slug: string
+  name: string
+  deliverables: string
+  price_min_cents: number | null
+  price_max_cents: number | null
+  price_unit: 'flat' | 'per_month' | 'custom'
+  recurring: number
+  active: number
+  notes: string | null
+}
+
+export interface PitchView {
+  pitch: {
+    id: number; prospect_id: number; version: number; channel: 'email' | 'manual_form'; recipient_email: string | null; application_url: string | null
+    subject: string | null; body: string; status: 'draft' | 'approved' | 'rejected' | 'superseded'; generator: 'template' | 'ollama'; ai_model: string | null
+    generation_note: string | null; options: PitchOptions; claims: Claim[]; flags: Flag[]; media_kit_id: number | null; edited: number
+    reviewed_at: string | null; reject_reason: string | null; created_at: string; updated_at: string
+  }
+  company: { id: number; name: string; domain: string | null; category: string | null; fitScore: number | null; reviewStatus: string }
+  program: { type: ProgramType; label: string; basis: string; overridden: boolean }
+  recipient: { id: number; email: string | null; role: string | null; verification_status: string; verified_at: string | null; source_url: string | null; eligibility: Eligibility } | null
+  application: { url: string; retrievedAt: string | null; origin: 'research' | 'manual' } | null
+  currentFlags: Flag[]
+  checks: Check[]
+  wordCount: number
+  claimValidation: { sentence: string; kind: string; inBody: boolean; problems: string[] }[]
+  attachment: {
+    mediaKitId: number; version: number; label: string; filename: string; mimeType: string; sizeBytes: number; sha256: string; storedFile: string
+    fileExists: boolean; checksumOk: boolean; isCurrentDefault: boolean; gmailAttachmentTested: false
+  } | { mediaKitId: number; missing: true } | null
+  versions: { id: number; version: number; channel: string; status: string; generator: string; created_at: string }[]
+  sendingAvailable: false
+}
+
+export interface PitchSummary {
+  id: number; prospect_id: number; company_name: string; fit_score: number | null; version: number; channel: 'email' | 'manual_form'
+  recipient_email: string | null; application_url: string | null; subject: string | null; status: string; generator: string; edited: boolean
+  updated_at: string; reject_reason: string | null; wordCount: number; blockers: number; warnings: number
+}
+
+export interface OutreachQueue {
+  ready: {
+    id: number; company_name: string; domain: string | null; fit_score: number | null; category_name: string | null; stage: string
+    programType: ProgramType; programLabel: string; evidenceCount: number; hasVerifiedEmail: boolean; suggestedChannel: 'email' | 'manual_form'; priority: number
+  }[]
+  drafts: PitchSummary[]
+  approved: PitchSummary[]
+  rejected: PitchSummary[]
+  pendingReview: number
+}
+
+export interface Application {
+  id: number; prospect_id: number; company_name: string; fit_score: number | null; application_url: string; url_origin: 'research' | 'manual'
+  url_retrieved_at: string | null; status: string; submitted_at: string | null; follow_up_date: string | null; notes: string | null
+}
+
+export interface ProspectOutreach {
+  company: { id: number; name: string; reviewStatus: string; concept: string | null }
+  program: { type: ProgramType; label: string; basis: string; overridden: boolean }
+  emailFlags: Flag[]
+  manualFlags: Flag[]
+  contacts: { id: number; email: string; role: string | null; verification_status: string }[]
+  suggestedApplication: { url: string; retrievedAt: string | null; origin: string } | null
+  application: Application | null
+  pitches: { id: number; version: number; channel: string; status: string; generator: string; created_at: string }[]
+  packages: Package[]
+}
+
 export interface ResearchStatus {
   workerHeartbeatAt: string | null
   workerRunning: boolean

@@ -20,6 +20,12 @@ import {
   addPoolCandidate, cancelBatch, createBatch, excludePoolCandidate, getBatch, listBatches, listPool, poolSummary, releasePoolCandidate,
 } from '../../../packages/research/batches'
 import { createFetcher } from '../../../packages/research/fetcher'
+import { getApplication, listApplications, markSubmitted, updateApplication } from '../../../packages/pitch/applications'
+import { gatherFacts, suggestApplicationUrl } from '../../../packages/pitch/facts'
+import { listPackages, updatePackage } from '../../../packages/pitch/packages'
+import {
+  approvePitch, generatePitch, outreachQueue, pitchView, regeneratePitch, rejectPitch, setProgramTypeOverride, updatePitch,
+} from '../../../packages/pitch/service'
 import { reverifyContacts } from '../../../packages/research/pipeline'
 import { addSuppression, listSuppressions, removeSuppression } from '../../../packages/crm/suppressions'
 import {
@@ -214,6 +220,56 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     const results = await reverifyContacts(db, pid, fetcher)
     return { results, detail: getProspectDetail(db, pid) }
   })
+
+  // ---------- Pitches (draft mode: there is no send endpoint) ----------
+  app.get('/api/outreach/queue', async () => outreachQueue(db))
+  app.get('/api/prospects/:id/outreach', async (req) => {
+    const pid = id((req.params as Body).id)
+    const facts = gatherFacts(db, pid, { channel: 'email' })
+    const manual = gatherFacts(db, pid, { channel: 'manual_form' })
+    return {
+      company: { id: pid, name: facts.prospect.name, reviewStatus: facts.prospect.reviewStatus, concept: facts.prospect.concept },
+      program: facts.program,
+      emailFlags: facts.flags,
+      manualFlags: manual.flags,
+      contacts: all(db, 'SELECT id, email, role, verification_status FROM contacts WHERE prospect_id = ? AND email IS NOT NULL ORDER BY is_primary DESC, id', pid),
+      suggestedApplication: suggestApplicationUrl(db, pid),
+      application: getApplication(db, pid),
+      pitches: all(db, 'SELECT id, version, channel, status, generator, created_at FROM pitches WHERE prospect_id = ? ORDER BY version DESC', pid),
+      packages: listPackages(db).filter((p) => p.active),
+    }
+  })
+  app.post('/api/prospects/:id/pitches', async (req, reply) => {
+    const p = await generatePitch(db, id((req.params as Body).id), (req.body ?? {}) as Body, { ai: opts.aiDeps })
+    return reply.code(201).send(pitchView(db, dataDir, p.id))
+  })
+  app.put('/api/prospects/:id/program-type', async (req) => {
+    const v = ((req.body ?? {}) as Body).value
+    setProgramTypeOverride(db, id((req.params as Body).id), typeof v === 'string' ? v : null)
+    return { ok: true }
+  })
+  app.get('/api/pitches/:id', async (req) => pitchView(db, dataDir, id((req.params as Body).id)))
+  app.patch('/api/pitches/:id', async (req) => {
+    const b = (req.body ?? {}) as Body
+    const p = updatePitch(db, id((req.params as Body).id), { subject: b.subject as string | undefined, body: b.body as string | undefined })
+    return pitchView(db, dataDir, p.id)
+  })
+  app.post('/api/pitches/:id/regenerate', async (req) => {
+    const p = await regeneratePitch(db, id((req.params as Body).id), (req.body ?? {}) as Body, { ai: opts.aiDeps })
+    return pitchView(db, dataDir, p.id)
+  })
+  app.post('/api/pitches/:id/approve', async (req) => pitchView(db, dataDir, approvePitch(db, id((req.params as Body).id)).id))
+  app.post('/api/pitches/:id/reject', async (req) => pitchView(db, dataDir, rejectPitch(db, id((req.params as Body).id), String(((req.body ?? {}) as Body).reason ?? '')).id))
+
+  app.get('/api/applications', async () => listApplications(db))
+  app.put('/api/prospects/:id/application', async (req) => updateApplication(db, id((req.params as Body).id), (req.body ?? {}) as never))
+  app.post('/api/prospects/:id/application/submitted', async (req) => {
+    const f = ((req.body ?? {}) as Body).follow_up_date
+    return markSubmitted(db, id((req.params as Body).id), typeof f === 'string' ? f : null)
+  })
+
+  app.get('/api/packages', async () => listPackages(db))
+  app.patch('/api/packages/:id', async (req) => updatePackage(db, id((req.params as Body).id), (req.body ?? {}) as never))
 
   // ---------- Brand discovery ----------
   app.get('/api/research/status', async () => {

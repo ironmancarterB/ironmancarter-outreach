@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Badge, Button, Drawer, EligibilityBadge, Field, Input, Loading, Notice, Select, Textarea, TierBadge, useToast } from '../components/ui'
 import { api, useApi } from '../lib/api'
 import { dateTime, relative, usd } from '../lib/format'
-import type { Category, Contact, ProspectDetail as Detail } from '../lib/types'
+import type { Category, Contact, ProspectDetail as Detail, ProspectOutreach } from '../lib/types'
+import { navigate } from '../lib/router'
 import { STAGES } from '../../../../packages/core/stages'
 import { FIT_FACTORS, fitTier } from '../../../../packages/core/scoring'
 
@@ -81,6 +82,7 @@ function DetailBody({ d, categories, mutate, onClose, onDeleted }: { d: Detail; 
         <ReviewBanner d={d} mutate={mutate} />
         {d.category?.compliance_note && <Notice tone="amber" title="Category guardrail">{d.category.compliance_note}</Notice>}
         <ProfileSection d={d} categories={categories} mutate={mutate} />
+        <PitchSection prospectId={p.id} approved={p.review_status === 'approved'} />
         <ContactsSection d={d} mutate={mutate} />
         <FitSection d={d} mutate={mutate} />
         <DealSection d={d} mutate={mutate} />
@@ -145,6 +147,43 @@ function ReviewBanner({ d, mutate }: { d: Detail; mutate: Mutate }) {
       <Button size="sm" variant="danger" onClick={() => decide('rejected')}>Reject</Button>
       <Button size="sm" variant="primary" onClick={() => decide('approved')}>Approve</Button>
     </div>
+  )
+}
+
+function PitchSection({ prospectId, approved }: { prospectId: number; approved: boolean }) {
+  const toast = useToast()
+  const { data } = useApi<ProspectOutreach>(`/api/prospects/${prospectId}/outreach`)
+  const [busy, setBusy] = useState(false)
+  if (!data) return null
+  const draft = async (channel: 'email' | 'manual_form') => {
+    setBusy(true)
+    try {
+      const v = await api.post<{ pitch: { id: number } }>(`/api/prospects/${prospectId}/pitches`, { channel })
+      navigate(`/drafts/pitch/${v.pitch.id}`)
+    } catch (e) {
+      toast((e as Error).message, 'error')
+      setBusy(false)
+    }
+  }
+  const live = data.pitches.filter((x) => x.status === 'draft' || x.status === 'approved')
+  return (
+    <Section title="Pitch">
+      <div className="space-y-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2"><span className="text-zinc-500">Program type:</span><Badge>{data.program.label}</Badge></div>
+        <p className="text-xs text-zinc-500">{data.program.basis}</p>
+        {live.map((x) => (
+          <a key={x.id} href={`#/drafts/pitch/${x.id}`} className="flex items-center gap-2 text-brand-600 hover:underline">
+            {x.channel === 'email' ? 'Email pitch' : 'Manual submission'} v{x.version} · {x.status === 'draft' ? 'needs approval' : x.status} →
+          </a>
+        ))}
+        {!approved ? <p className="text-xs text-zinc-500">Approve this company before drafting a pitch.</p> : (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {!live.some((x) => x.channel === 'email') && <Button size="sm" disabled={busy} onClick={() => draft('email')}>Draft email pitch</Button>}
+            {!live.some((x) => x.channel === 'manual_form') && <Button size="sm" disabled={busy} onClick={() => draft('manual_form')}>Draft manual message</Button>}
+          </div>
+        )}
+      </div>
+    </Section>
   )
 }
 

@@ -156,6 +156,37 @@ describe('discovery and review endpoints', () => {
   })
 })
 
+describe('pitch endpoints (draft mode)', () => {
+  it('refuses to draft for unreviewed companies, drafts for approved ones, and has no send endpoint', async () => {
+    const id = (await post('/api/prospects', { company_name: 'Brand', website: 'brand.test', contact: { email: 'partnerships@brand.test' } })).json().prospect.id
+    expect((await post(`/api/prospects/${id}/pitches`, { channel: 'email' })).statusCode).toBe(409)
+    await post(`/api/prospects/${id}/review`, { decision: 'approved' })
+    const r = await post(`/api/prospects/${id}/pitches`, { channel: 'email' })
+    expect(r.statusCode).toBe(201)
+    const view = r.json()
+    expect(view).toMatchObject({ sendingAvailable: false, pitch: { status: 'draft', channel: 'email' } })
+    expect(view.recipient.email).toBe('partnerships@brand.test')
+    for (const path of [`/api/pitches/${view.pitch.id}/send`, '/api/send', '/api/outreach/send']) {
+      expect((await post(path, {})).statusCode).toBe(404)
+    }
+  })
+
+  it('blocks approval while blockers remain', async () => {
+    const id = (await post('/api/prospects', { company_name: 'Brand', website: 'brand.test' })).json().prospect.id
+    await post(`/api/prospects/${id}/review`, { decision: 'approved' })
+    const view = (await post(`/api/prospects/${id}/pitches`, { channel: 'email' })).json()
+    const r = await post(`/api/pitches/${view.pitch.id}/approve`, {})
+    expect(r.statusCode).toBe(409)
+    expect(r.json().error.message).toMatch(/No verified business email/)
+  })
+
+  it('lists and validates packages', async () => {
+    const list = (await app.inject({ url: '/api/packages', headers: H })).json()
+    expect(list.map((p: { name: string }) => p.name)).toEqual(['Single Sponsored Short', 'Three-Video Campaign', 'Monthly Partnership', 'Three-Month Partnership'])
+    expect((await patch('/api/packages/1', { price_min_cents: -5 })).statusCode).toBe(400)
+  })
+})
+
 describe('AI endpoints', () => {
   it('runs a test prompt on the free mock provider and records $0', async () => {
     const r = await post('/api/ai/test', { prompt: 'hello' })

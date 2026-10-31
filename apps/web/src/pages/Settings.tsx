@@ -3,7 +3,7 @@ import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Notice, PageHeade
 import { api, useApi } from '../lib/api'
 import { dateTime, metricValue, usdAmount } from '../lib/format'
 import { navigate } from '../lib/router'
-import type { Activity, Category, Metric } from '../lib/types'
+import type { Activity, Category, Metric, Package } from '../lib/types'
 
 type SettingsData = { values: Record<string, unknown>; locked: Record<string, string>; editable: string[] }
 
@@ -11,6 +11,7 @@ const TABS = [
   { id: 'business', label: 'Business' },
   { id: 'analytics', label: 'Creator analytics' },
   { id: 'categories', label: 'Categories' },
+  { id: 'packages', label: 'Packages & rates' },
   { id: 'ai', label: 'AI & costs' },
   { id: 'sending', label: 'Sending & compliance' },
   { id: 'suppression', label: 'Suppression list' },
@@ -30,6 +31,7 @@ export default function Settings({ tab }: { tab?: string }) {
           {current === 'business' && <Business s={settings.data} reload={settings.reload} />}
           {current === 'analytics' && <Analytics />}
           {current === 'categories' && <Categories />}
+          {current === 'packages' && <Packages />}
           {current === 'ai' && <AISettings s={settings.data} reload={settings.reload} />}
           {current === 'sending' && <Sending s={settings.data} reload={settings.reload} />}
           {current === 'suppression' && <Suppression />}
@@ -215,6 +217,60 @@ function Categories() {
         </Card>
       ))}
     </div>
+  )
+}
+
+function Packages() {
+  const toast = useToast()
+  const { data, error, reload } = useApi<Package[]>('/api/packages')
+  if (error) return <ErrorBox error={error} />
+  if (!data) return <Loading />
+  return (
+    <div className="space-y-4">
+      <Notice>
+        Your sponsorship packages. Prices are exploratory ranges, not guaranteed market rates. A pitch only mentions a price when you tick
+        “include rate” or type custom rate wording for that pitch. Usage rights, paid ads, whitelisting and exclusivity are never included automatically.
+      </Notice>
+      {data.map((p) => <PackageCard key={p.id} p={p} onSaved={() => { toast(`Saved ${p.name}`); reload() }} onError={(m) => toast(m, 'error')} />)}
+    </div>
+  )
+}
+
+function PackageCard({ p, onSaved, onError }: { p: Package; onSaved: () => void; onError: (m: string) => void }) {
+  const [f, setF] = useState({
+    name: p.name, deliverables: p.deliverables, min: p.price_min_cents != null ? String(p.price_min_cents / 100) : '',
+    max: p.price_max_cents != null ? String(p.price_max_cents / 100) : '', unit: p.price_unit, recurring: !!p.recurring, active: !!p.active,
+  })
+  const toCents = (s: string) => (s === '' ? null : Math.round(Number(s) * 100))
+  const save = async () => {
+    try {
+      await api.patch(`/api/packages/${p.id}`, {
+        name: f.name, deliverables: f.deliverables, price_min_cents: toCents(f.min), price_max_cents: toCents(f.max), price_unit: f.unit, recurring: f.recurring, active: f.active,
+      })
+      onSaved()
+    } catch (e) {
+      onError((e as Error).message)
+    }
+  }
+  return (
+    <Card>
+      <div className="grid gap-3 md:grid-cols-[1fr_1.5fr]">
+        <Field label="Name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+        <Field label="Deliverables (as written in pitches)"><Input value={f.deliverables} onChange={(e) => setF({ ...f, deliverables: e.target.value })} /></Field>
+      </div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <Field label="Price type" className="w-44">
+          <Select value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value as Package['price_unit'] })}>
+            <option value="flat">Flat</option><option value="per_month">Per month</option><option value="custom">Custom quote</option>
+          </Select>
+        </Field>
+        <Field label="From (USD)" className="w-28"><Input type="number" min="0" value={f.min} onChange={(e) => setF({ ...f, min: e.target.value })} disabled={f.unit === 'custom'} /></Field>
+        <Field label="To (USD)" className="w-28"><Input type="number" min="0" value={f.max} onChange={(e) => setF({ ...f, max: e.target.value })} disabled={f.unit === 'custom'} /></Field>
+        <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={f.recurring} onChange={(e) => setF({ ...f, recurring: e.target.checked })} /> Recurring</label>
+        <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Offer in pitches</label>
+        <Button className="ml-auto" onClick={save}>Save</Button>
+      </div>
+    </Card>
   )
 }
 

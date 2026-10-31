@@ -16,18 +16,6 @@ function PhaseNote({ phase, children }: { phase: string; children: ReactNode }) 
   )
 }
 
-export function Drafts() {
-  return (
-    <>
-      <PageHeader title="Email Drafts" subtitle="Personalized pitches waiting for your review." />
-      <div className="space-y-4">
-        <PhaseNote phase="Phase 3">AI-personalized drafts (100–150 words, using only verified research and your recorded analytics) appear here with a preview, the media kit attachment, and approve/reject controls.</PhaseNote>
-        <Empty title="No drafts">Nothing has been drafted.</Empty>
-      </div>
-    </>
-  )
-}
-
 export function SentEmails() {
   return (
     <>

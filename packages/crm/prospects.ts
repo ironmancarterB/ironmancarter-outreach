@@ -33,6 +33,7 @@ export interface Prospect {
   review_note: string | null
   reviewed_at: string | null
   last_researched_at: string | null
+  program_type_override: 'paid_sponsorship' | 'creator_partnerships' | 'affiliate_only' | 'unknown' | null
   created_at: string
   updated_at: string
 }
@@ -400,6 +401,12 @@ export function reviewProspect(db: DB, id: number, decision: 'approved' | 'rejec
       decision, clean, decision === 'pending' ? null : nowIso(), nowIso(), id)
     logActivity(db, `review.${decision}`, decision === 'approved' ? 'Approved after review' : decision === 'rejected' ? `Rejected: ${clean}` : 'Moved back to the review queue',
       { prospectId: id, data: { note: clean } })
+    // Withdrawing approval takes the company's open pitches out of the outreach workflow.
+    if (decision !== 'approved') {
+      run(db, `UPDATE pitches SET status = 'rejected', reject_reason = ?, reviewed_at = ?, updated_at = ? WHERE prospect_id = ? AND status IN ('draft', 'approved')`,
+        `Company review changed to ${decision}`, nowIso(), nowIso(), id)
+      if (decision === 'pending' && ['draft_ready', 'awaiting_approval'].includes(before.stage)) setStage(db, id, 'qualified', 'Review reopened')
+    }
     if (decision === 'approved' && ['discovered', 'researching'].includes(before.stage)) setStage(db, id, 'qualified', 'Approved in review')
     if (decision === 'rejected' && !['won', 'lost', 'not_interested', 'opted_out', 'paused'].includes(before.stage)) setStage(db, id, 'paused', 'Rejected in review')
     return getProspect(db, id)

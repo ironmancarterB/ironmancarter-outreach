@@ -84,6 +84,12 @@ export function scoreResearch(input: ScoreInput): ScoreResult {
   return { breakdown, score: scoreFit(breakdown), explanation: why.join(' ') }
 }
 
+// Earlier wording of templates, still stored on companies researched before it changed.
+const LEGACY_CONCEPTS = ['Short on a real use case (e.g. safer public Wi-Fi while travelling to events), avoiding any anonymity or security guarantees.']
+
+export const isTemplateConcept = (concept: string | null | undefined) =>
+  !!concept && (Object.values(CONCEPT_TEMPLATES).includes(concept) || LEGACY_CONCEPTS.includes(concept))
+
 // Template concepts used when no local AI is selected. Deliberately generic; edit per brand.
 export const CONCEPT_TEMPLATES: Record<string, string> = {
   'gaming-peripherals': 'Gear-in-action League of Legends short: a clutch play or challenge with the product visible and naturally called out, with a recurring monthly series option.',
@@ -93,5 +99,5 @@ export const CONCEPT_TEMPLATES: Record<string, string> = {
   'creator-software': 'Behind-the-scenes short showing how the product fits the editing or streaming workflow, linked to a recurring tips series.',
   'productivity-tech': 'Day-in-the-life creator short showing where the product genuinely fits, kept light and comedic.',
   'energy-drinks': 'Late-night ranked session short with the product on desk, aimed at an adult audience and with no health or performance claims.',
-  'vpn-privacy': 'Short on a real use case (e.g. safer public Wi-Fi while travelling to events), avoiding any anonymity or security guarantees.',
+  'vpn-privacy': 'Short on a real use case (e.g. gaming on hotel Wi-Fi while travelling to events), avoiding any anonymity or security guarantees.',
 }

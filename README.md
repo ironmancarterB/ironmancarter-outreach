@@ -3,8 +3,8 @@
 A local-first command center for researching sponsors, managing the sponsorship CRM and (in later phases)
 sending approved outreach through Gmail. It runs entirely on this Mac.
 
-**Current phase: 2 (Brand Discovery).** This build contains **no email-sending code**, no Gmail connection and
-no paid AI. Autopilot, live sending, sending tiers and paid AI are locked.
+**Current phase: 3 (Pitches & approval).** This build contains **no email-sending code**, no Gmail connection and
+no paid AI. Autopilot, live sending, sending tiers and paid AI are locked. All outreach is in draft mode.
 
 ## Launch it
 
@@ -72,6 +72,38 @@ The candidate pool starts with ~210 real brands across the eight categories (nam
 `packages/db/brandSeeds.ts`). Add more under Brand Discovery → Candidates. With the Ollama provider selected, campaign
 concepts are drafted locally from the recorded facts; otherwise a per-category template is used.
 
+## Pitches and approval (Phase 3)
+
+1. Approve companies in **Brand Discovery → Review queue**. Only approved companies can be drafted.
+2. **Email Drafts → Ready to draft** lists approved companies, best first (published creator partnerships, then fit and
+   contact quality). Choose **Draft email** (verified mailbox) or **Draft manual message** (creator portal / contact form).
+3. The pitch editor shows the proposed recipient and its verification, the subject and body (editable), the media kit
+   attachment reference, every check, missing information, and the evidence behind each personalized sentence.
+4. **Save draft**, **Regenerate** (with a package, rates, custom deliverables or your own collaboration idea), **Approve** or
+   **Reject**. Editing an approved pitch withdraws the approval. Regenerating keeps the old version in history.
+
+How pitches are written:
+
+- Only from verified facts: recorded research evidence (with its quoted text), your creator analytics marked "may be quoted",
+  your packages, and the default media kit. Missing information is flagged, never filled in.
+- Programs are classified from evidence: **paid sponsorships** (a source mentions payment), **creator partnerships (pay not
+  stated)**, **affiliate only** (the pitch asks about a paid sponsorship instead) or **none found**.
+- Prices appear only when you tick "include rate" for a package or type custom rate wording.
+- Checks block approval for invented numbers, promises about results, implied past relationships, references to budgets,
+  unrequested prices, foreign email addresses or links, placeholders, misleading subjects, a missing signature, an ineligible
+  recipient, and category guardrails (no anonymity/security guarantees for VPNs; no minors or health/performance claims for
+  energy drinks). Generic mass-email phrasing and lengths outside 100–150 words are warnings.
+- With the **mock** provider (default) pitches come from the template. With **Ollama** selected, the local model writes a draft
+  citing numbered facts; it is used only if every citation is real and it passes the checks, otherwise the template is used
+  and the reason is shown. No other provider is ever tried. (Thinking models such as gemma4 run with thinking turned off.)
+
+Manual submissions: the app stores the verified creator portal / form URL (pages research fetched are marked verified; URLs you
+add must be on the brand's own domain), drafts a tailored message, and tracks status and follow-up dates. **You** open the page
+and submit; "I submitted it" records it and sets a one-week follow-up. Forms are never filled in or submitted automatically.
+
+The email attachment is a reference to the default media kit version (file and checksum verified). Attaching it through Gmail
+is **not yet tested**; that is Phase 4.
+
 ## Where things live
 
 | Path | Contents |
@@ -85,6 +117,7 @@ concepts are drafted locally from the recorded facts; otherwise a per-category t
 | `packages/ai/` | AI router with mock, Ollama and (locked) Anthropic providers, budget guard, cache and usage ledger. |
 | `packages/research/` | Polite fetcher + robots.txt, page extraction, evidence detection, scoring, research pipeline, batches, durable worker queue. |
 | `apps/worker/` | The research worker process (`npm run worker`). Safe to stop any time; interrupted work resumes. |
+| `packages/pitch/` | Fact gathering, program classification, template writer, local-AI writer, checks, evidence validation, approvals, manual applications, packages. |
 | `scripts/` | Command-line import, migrations, and the one-off media kit email fix. |
 | `tests/` | Vitest suites. |
 | `data/` | **Git-ignored.** `outreach.db`, media kit versions, and `media-kit/originals/` (your untouched original PDF plus the corrected copy). |
