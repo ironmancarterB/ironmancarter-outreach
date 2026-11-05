@@ -11,6 +11,7 @@ import { parseMessage, sha256 } from '../packages/gmail/mime'
 import { memoryStore } from '../packages/gmail/secrets'
 import { addBusinessDays, dayKey } from '../packages/outreach/businessDays'
 import { classifyByRules, classifyReply, stripQuoted } from '../packages/outreach/classify'
+import { listLeads } from '../packages/crm/leads'
 import type { AIProvider } from '../packages/ai/types'
 import { fakeGoogle } from './fakeGoogle'
 import { fakePdf, freshDb, tempDir } from './helpers'
@@ -359,6 +360,22 @@ describe('conversation sync', () => {
     expect(JSON.stringify(all(db, 'SELECT * FROM email_messages'))).not.toContain('Big sale')
     // Only CRM conversations were read.
     expect(google.state.requests.filter((x) => x.url.includes('/messages?')).every((x) => decodeURIComponent(x.url).includes(`from:${b.email}`) || decodeURIComponent(x.url).includes('in:sent'))).toBe(true)
+  })
+
+  it('a hard bounce suppresses the address that was sent to and removes the brand from leads', async () => {
+    const b = await sentBrand()
+    google.receive({ from: 'mailer-daemon@googlemail.com', text: 'Delivery failed. 550 5.1.1 The email account does not exist.', threadId: b.threadId })
+    await req('POST', '/api/outreach/sync', {})
+    expect(get(db, "SELECT source FROM suppressions WHERE kind = 'email' AND value = ?", b.email)).toEqual({ source: 'bounce' })
+    expect(listLeads(db).find((l) => l.id === b.prospect.id)).toMatchObject({ actionable: false, bounce_status: 'bounced', exclusion: { code: 'bounced' } })
+  })
+
+  it('a temporary failure is flagged for you but does not suppress the address', async () => {
+    const b = await sentBrand()
+    google.receive({ from: 'mailer-daemon@googlemail.com', text: 'Delayed: 452 4.2.2 Mailbox full. Will keep trying.', threadId: b.threadId })
+    await req('POST', '/api/outreach/sync', {})
+    expect(get(db, "SELECT 1 FROM suppressions WHERE value = ?", b.email)).toBeUndefined()
+    expect(get(db, "SELECT needs_review FROM email_messages WHERE kind = 'bounce'")).toEqual({ needs_review: 1 })
   })
 
   it('keeps follow-ups for an out-of-office reply, and lets you correct the classification', async () => {

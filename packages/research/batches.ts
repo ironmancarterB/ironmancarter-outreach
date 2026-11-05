@@ -6,6 +6,9 @@ import { normalizeDomain, normalizeUrl } from '../core/normalize'
 
 export const BATCH_SIZES = [20, 50, 100, 200, 500] as const
 export type BatchSize = (typeof BATCH_SIZES)[number]
+// A batch's size is how many brands with qualifying emails you want. Research keeps going until it has them,
+// the pool runs out, or it has tried this many times the target.
+export const MAX_RESEARCH_MULTIPLIER = 4
 
 const AVAILABLE = `cp.status = 'available' AND NOT EXISTS (SELECT 1 FROM prospects p WHERE p.domain = cp.domain)`
 
@@ -63,35 +66,70 @@ export function excludePoolCandidate(db: DB, id: number, note: string) {
   logActivity(db, 'pool.excluded', `Excluded ${row.company_name} from research`)
 }
 
+type Cat = { id: number; name: string; priority: number; research_quota: number }
+type Pick = { id: number; company_name: string; website: string; domain: string; category_id: number }
+
 // Picks candidates from enabled categories: higher-priority categories first, and categories that share a
 // priority take turns, so a batch is a mix rather than one category. Never more than a category's quota.
-// Never pads the batch: if there are fewer candidates than requested, the shortfall is recorded.
-export function createBatch(db: DB, input: { size: number; categoryIds?: number[] }) {
-  if (!BATCH_SIZES.includes(input.size as BatchSize)) throw invalid(`Batch size must be one of ${BATCH_SIZES.join(', ')}`)
-  if (get(db, "SELECT 1 FROM research_batches WHERE status IN ('queued', 'running')")) throw new AppError(409, 'busy', 'A research batch is already running. Wait for it or cancel it.')
-  const cats = all<{ id: number; name: string; priority: number; research_quota: number }>(db,
-    'SELECT id, name, priority, research_quota FROM categories WHERE enabled = 1 ORDER BY priority, sort_order')
-    .filter((c) => !input.categoryIds?.length || input.categoryIds.includes(c.id))
-  if (!cats.length) throw invalid('No enabled categories selected')
-
-  type Pick = { id: number; company_name: string; website: string; domain: string; category_id: number }
+function pickCandidates(db: DB, cats: Cat[], count: number, used: Map<number, number> = new Map()): Pick[] {
   const queues = new Map(cats.map((c) => [c.id, all<Pick>(db, `SELECT cp.id, cp.company_name, cp.website, cp.domain, cp.category_id FROM candidate_pool cp
-    WHERE cp.category_id = ? AND ${AVAILABLE} ORDER BY cp.origin = 'seed', cp.id LIMIT ?`, c.id, c.research_quota)]))
+    WHERE cp.category_id = ? AND ${AVAILABLE} ORDER BY cp.origin = 'seed', cp.id LIMIT ?`, c.id, Math.max(0, c.research_quota - (used.get(c.id) ?? 0)))]))
   const picks: Pick[] = []
   for (const priority of [...new Set(cats.map((c) => c.priority))]) {
     const group = cats.filter((c) => c.priority === priority)
     let added = true
-    while (added && picks.length < input.size) {
+    while (added && picks.length < count) {
       added = false
       for (const c of group) {
         const next = queues.get(c.id)!.shift()
-        if (next && picks.length < input.size) {
+        if (next && picks.length < count) {
           picks.push(next)
           added = true
         }
       }
     }
   }
+  return picks
+}
+
+function enqueue(db: DB, batchId: number, picks: Pick[], now: string) {
+  for (const p of picks) {
+    run(db, `INSERT INTO research_candidates (batch_id, pool_id, company_name, website, domain, category_id) VALUES (?, ?, ?, ?, ?, ?)`,
+      batchId, p.id, p.company_name, p.website, p.domain, p.category_id)
+    run(db, "UPDATE candidate_pool SET status = 'queued', updated_at = ? WHERE id = ?", now, p.id)
+  }
+}
+
+// Queues more candidates when a batch has run dry short of its target. Returns how many were added.
+export function topUpBatch(db: DB, batchId: number): number {
+  const b = get<{ requested_size: number; category_ids: string }>(db, 'SELECT requested_size, category_ids FROM research_batches WHERE id = ?', batchId)!
+  const rows = all<{ category_id: number; status: string; qualified: number | null }>(db, 'SELECT category_id, status, qualified FROM research_candidates WHERE batch_id = ?', batchId)
+  const need = b.requested_size - rows.filter((r) => r.qualified === 1).length
+  const room = b.requested_size * MAX_RESEARCH_MULTIPLIER - rows.length
+  const count = Math.min(need, room)
+  if (count <= 0) return 0
+  const ids = JSON.parse(b.category_ids) as number[]
+  const cats = all<Cat>(db, 'SELECT id, name, priority, research_quota FROM categories WHERE enabled = 1 ORDER BY priority, sort_order').filter((c) => ids.includes(c.id))
+  const used = new Map<number, number>()
+  for (const r of rows) used.set(r.category_id, (used.get(r.category_id) ?? 0) + 1)
+  const picks = pickCandidates(db, cats, count, used)
+  if (picks.length) {
+    enqueue(db, batchId, picks, nowIso())
+    logActivity(db, 'research.batch_topped_up', `Batch #${batchId} is short of ${b.requested_size} qualifying emails; researching ${picks.length} more brand(s).`)
+  }
+  return picks.length
+}
+
+// Never pads the batch: if there are fewer candidates than requested, the shortfall is recorded.
+export function createBatch(db: DB, input: { size: number; categoryIds?: number[] }) {
+  if (!BATCH_SIZES.includes(input.size as BatchSize)) throw invalid(`Batch size must be one of ${BATCH_SIZES.join(', ')}`)
+  if (get(db, "SELECT 1 FROM research_batches WHERE status IN ('queued', 'running')")) throw new AppError(409, 'busy', 'A research batch is already running. Wait for it or cancel it.')
+  const cats = all<Cat>(db,
+    'SELECT id, name, priority, research_quota FROM categories WHERE enabled = 1 ORDER BY priority, sort_order')
+    .filter((c) => !input.categoryIds?.length || input.categoryIds.includes(c.id))
+  if (!cats.length) throw invalid('No enabled categories selected')
+
+  const picks = pickCandidates(db, cats, input.size)
   const perCategory = cats.map((c) => `${c.name}: ${picks.filter((p) => p.category_id === c.id).length}`)
   if (!picks.length) throw new AppError(409, 'empty', 'No unresearched candidates are available in the selected categories. Add candidates or raise quotas.')
   const shortfall = picks.length < input.size
@@ -102,11 +140,7 @@ export function createBatch(db: DB, input: { size: number; categoryIds?: number[
     const now = nowIso()
     const batchId = run(db, `INSERT INTO research_batches (requested_size, category_ids, status, shortfall_note, ai_provider, created_at) VALUES (?, ?, 'queued', ?, ?, ?)`,
       input.size, JSON.stringify(cats.map((c) => c.id)), shortfall, getSetting<string>(db, 'ai.provider'), now).lastId
-    for (const p of picks) {
-      run(db, `INSERT INTO research_candidates (batch_id, pool_id, company_name, website, domain, category_id) VALUES (?, ?, ?, ?, ?, ?)`,
-        batchId, p.id, p.company_name, p.website, p.domain, p.category_id)
-      run(db, "UPDATE candidate_pool SET status = 'queued', updated_at = ? WHERE id = ?", now, p.id)
-    }
+    enqueue(db, batchId, picks, now)
     logActivity(db, 'research.batch_created', `Queued research batch #${batchId}: ${picks.length} brands${shortfall ? ` (requested ${input.size})` : ''}`)
     return getBatch(db, batchId)
   })
@@ -117,7 +151,9 @@ const COUNTS = `
   (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.status IN ('pending', 'researching')) AS remaining,
   (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.status = 'done') AS done,
   (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.status = 'duplicate') AS duplicates,
-  (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.status IN ('unreachable', 'blocked', 'failed')) AS problems`
+  (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.status IN ('unreachable', 'blocked', 'failed')) AS problems,
+  (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.qualified = 1) AS qualified,
+  (SELECT count(*) FROM research_candidates rc WHERE rc.batch_id = b.id AND rc.status IN ('done', 'duplicate', 'unreachable', 'blocked', 'failed')) AS researched`
 
 export interface BatchRow {
   id: number
@@ -134,6 +170,8 @@ export interface BatchRow {
   done: number
   duplicates: number
   problems: number
+  qualified: number
+  researched: number
 }
 
 export interface BatchCandidateRow {
@@ -149,6 +187,8 @@ export interface BatchCandidateRow {
   attempts: number
   prospect_id: number | null
   message: string | null
+  qualified: number | null
+  exclusion_reason: string | null
   fit_score: number | null
   review_status: string | null
 }

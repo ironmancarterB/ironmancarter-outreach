@@ -44,6 +44,7 @@ import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 import { contactStatus, getRun, queueContactResearch } from '../../../packages/research/contacts'
 import { addManualContact, contactDiscovery, contactFindings, reviewContact } from '../../../packages/research/contactReview'
 import { recoverInterruptedSends } from '../../../packages/outreach/send'
+import { leadMetrics, listLeads } from '../../../packages/crm/leads'
 import { LOCKED, VALIDATORS, validateSetting } from './settingsPolicy'
 
 export interface AppOptions {
@@ -189,7 +190,13 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       sort: (['updated', 'created', 'name', 'score', 'value'] as const).find((s) => s === q.sort),
       dir: q.dir === 'asc' ? 'asc' : 'desc',
     }
-    return listProspects(db, filters)
+    const rows = listProspects(db, filters)
+    // actionable: ready for outreach now. usable: has a qualifying email, whatever its outreach status.
+    if (q.lead === 'actionable' || q.lead === 'usable') {
+      const keep = new Set(listLeads(db).filter((l) => (q.lead === 'actionable' ? l.actionable : l.has_qualifying_email || l.previously_contacted)).map((l) => l.id))
+      return rows.filter((r) => keep.has(r.id))
+    }
+    return rows
   })
   app.post('/api/prospects/check-duplicates', async (req) => {
     const b = (req.body ?? {}) as Body
@@ -333,6 +340,12 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.get('/api/packages', async () => listPackages(db))
   app.patch('/api/packages/:id', async (req) => updatePackage(db, id((req.params as Body).id), (req.body ?? {}) as never))
 
+  // ---------- Verified leads ----------
+  app.get('/api/leads', async () => {
+    const leads = listLeads(db)
+    return { metrics: leadMetrics(db, leads), actionable: leads.filter((l) => l.actionable), excluded: leads.filter((l) => !l.actionable) }
+  })
+
   // ---------- Brand discovery ----------
   app.get('/api/research/status', async () => {
     const beat = get<{ value: string }>(db, "SELECT value FROM settings WHERE key = 'worker.heartbeatAt'")
@@ -341,7 +354,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       workerHeartbeatAt: at,
       workerRunning: !!at && Date.now() - new Date(at).getTime() < 20_000,
       active: get(db, "SELECT id, status FROM research_batches WHERE status IN ('queued', 'running') ORDER BY id LIMIT 1") ?? null,
-      pendingReview: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'pending'")!.n,
+      pendingReview: listLeads(db).filter((l) => l.actionable && l.review_status === 'pending').length,
     }
   })
   app.get('/api/research/pool', async (req) => {

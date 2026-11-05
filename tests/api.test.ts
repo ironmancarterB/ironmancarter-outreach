@@ -159,7 +159,7 @@ describe('discovery and review endpoints', () => {
 
 describe('pitch endpoints (draft mode)', () => {
   it('refuses to draft for unreviewed companies, drafts for approved ones, and has no send endpoint', async () => {
-    const id = (await post('/api/prospects', { company_name: 'Brand', website: 'brand.test', contact: { email: 'partnerships@brand.test' } })).json().prospect.id
+    const id = (await post('/api/prospects', { company_name: 'Brand', website: 'brand.test', contact: { email: 'partnerships@brand.test', source_url: 'https://brand.test/partners', verification_status: 'verified' } })).json().prospect.id
     expect((await post(`/api/prospects/${id}/pitches`, { channel: 'email' })).statusCode).toBe(409)
     await post(`/api/prospects/${id}/review`, { decision: 'approved' })
     const r = await post(`/api/prospects/${id}/pitches`, { channel: 'email' })
@@ -172,13 +172,12 @@ describe('pitch endpoints (draft mode)', () => {
     }
   })
 
-  it('blocks approval while blockers remain', async () => {
+  it('refuses to draft an email for a company with no qualifying contact', async () => {
     const id = (await post('/api/prospects', { company_name: 'Brand', website: 'brand.test' })).json().prospect.id
     await post(`/api/prospects/${id}/review`, { decision: 'approved' })
-    const view = (await post(`/api/prospects/${id}/pitches`, { channel: 'email' })).json()
-    const r = await post(`/api/pitches/${view.pitch.id}/approve`, {})
+    const r = await post(`/api/prospects/${id}/pitches`, { channel: 'email' })
     expect(r.statusCode).toBe(409)
-    expect(r.json().error.message).toMatch(/No verified business email/)
+    expect(r.json().error.message).toMatch(/no qualifying public email/)
   })
 
   it('lists and validates packages', async () => {

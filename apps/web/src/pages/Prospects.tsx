@@ -30,6 +30,7 @@ export default function Prospects({ openId }: { openId: number | null }) {
   const [category, setCategory] = useState('')
   const [tier, setTier] = useState('')
   const [tag, setTag] = useState('')
+  const [lead, setLead] = useState('usable')
   const [sort, setSort] = useState('updated')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
   const [showNew, setShowNew] = useState(false)
@@ -40,7 +41,7 @@ export default function Prospects({ openId }: { openId: number | null }) {
     return () => clearTimeout(t)
   }, [q])
 
-  const qs = new URLSearchParams(Object.entries({ q: debouncedQ, stage, category_id: category, tier, tag, sort, dir }).filter(([, v]) => v)).toString()
+  const qs = new URLSearchParams(Object.entries({ q: debouncedQ, stage, category_id: category, tier, tag, sort, dir, lead }).filter(([, v]) => v)).toString()
   const { data, error, reload } = useApi<ProspectListItem[]>(`/api/prospects?${qs}`)
   const { data: categories } = useApi<Category[]>('/api/categories')
   const { data: tags } = useApi<{ name: string; count: number }[]>(`/api/tags?r=${data?.length ?? 0}`)
@@ -74,6 +75,11 @@ export default function Prospects({ openId }: { openId: number | null }) {
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Input className="max-w-xs" placeholder="Search name, domain, email, tag…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+        <Select className="w-auto" value={lead} onChange={(e) => setLead(e.target.value)} aria-label="Contact">
+          <option value="usable">With a usable email</option>
+          <option value="actionable">Actionable only</option>
+          <option value="">All companies</option>
+        </Select>
         <Select className="w-auto" value={stage} onChange={(e) => setStage(e.target.value)} aria-label="Stage">
           <option value="">All stages</option>
           {STAGES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -101,7 +107,7 @@ export default function Prospects({ openId }: { openId: number | null }) {
         </div>
       </div>
 
-      {error ? <ErrorBox error={error} /> : !data ? <Loading /> : data.length === 0 && !(debouncedQ || stage || category || tier || tag) ? (
+      {error ? <ErrorBox error={error} /> : !data ? <Loading /> : data.length === 0 && !(debouncedQ || stage || category || tier || tag || lead) ? (
         <Empty title="No companies yet">Add a company by hand or import a CSV. Brand research (Phase 2) will fill this automatically, using only verified sources.</Empty>
       ) : view === 'board' ? (
         <Board items={data} onMove={moveTo} />

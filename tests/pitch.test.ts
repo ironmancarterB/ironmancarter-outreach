@@ -11,6 +11,7 @@ import { firstSentence } from '../packages/pitch/template'
 import { approvePitch, attachmentReference, evaluatePitch, generatePitch, outreachQueue, regeneratePitch, rejectPitch, updatePitch } from '../packages/pitch/service'
 import { markSubmitted, updateApplication } from '../packages/pitch/applications'
 import { updatePackage } from '../packages/pitch/packages'
+import { ensureMailDomains } from '../packages/research/mailDomain'
 import type { AIProvider } from '../packages/ai/types'
 import { fakePdf, freshDb, tempDir } from './helpers'
 
@@ -258,18 +259,18 @@ describe('approval workflow', () => {
     expect(get(db, 'SELECT status, reject_reason FROM pitches WHERE id = ?', pitch.id)).toEqual({ status: 'rejected', reject_reason: 'Company review changed to pending' })
   })
 
-  it('blocks approving an email pitch with no verified recipient', async () => {
+  it('refuses to draft an email with no qualifying recipient', async () => {
     const db = freshDb()
     const p = brand(db, { email: null })
-    const pitch = await generatePitch(db, p.id, { channel: 'email' })
-    expect(() => approvePitch(db, pitch.id)).toThrow(/No verified business email/)
+    await expect(generatePitch(db, p.id, { channel: 'email' })).rejects.toThrow(/no qualifying public email/)
   })
 
   it('lists approved companies to draft, best first', async () => {
     const db = freshDb()
     brand(db, { name: 'Affiliate Co', domain: 'aff.test', evidence: [{ title: 'Affiliate program', snippet: 'Affiliate program.' }] })
     brand(db, { name: 'Creator Co', domain: 'creator.test' })
-    brand(db, { name: 'Unreviewed', domain: 'unrev.test', approve: false })
+    const unreviewed = brand(db, { name: 'Unreviewed', domain: 'unrev.test', approve: false })
+    await ensureMailDomains(db, unreviewed.id)
     const q = outreachQueue(db)
     expect(q.ready.map((r) => r.company_name)).toEqual(['Creator Co', 'Affiliate Co'])
     expect(q.pendingReview).toBe(1)

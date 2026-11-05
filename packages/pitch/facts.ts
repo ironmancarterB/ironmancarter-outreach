@@ -3,6 +3,7 @@
 import { getSignature } from './signature'
 import { all, get, getSetting, type DB } from '../db'
 import { contactEligibility, getProspect, type Contact } from '../crm/prospects'
+import { departmentOf } from '../crm/leads'
 import type { EligibilityResult } from '../core/eligibility'
 import { invalid } from '../core/errors'
 import { SIGNAL_LABELS } from '../research/evidence'
@@ -118,7 +119,7 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
   if (options.channel === 'email') {
     // Best tier first: a direct brand address, then a confirmed agency, then anything else with an email (which stays blocked).
     const rank = (c: Contact) => (c.verification_status === 'failed' ? 9 : c.contact_tier === 'VERIFIED_DIRECT' ? 0 : c.contact_tier === 'VERIFIED_AGENCY' && c.agency_confirmed ? 1 : c.verification_status === 'verified' ? 2 : 3)
-    const withEmail = contacts.filter((c) => c.email).sort((a, b) => rank(a) - rank(b) || b.is_primary - a.is_primary)
+    const withEmail = contacts.filter((c) => c.email).sort((a, b) => rank(a) - rank(b) || departmentOf(a).rank - departmentOf(b).rank || b.is_primary - a.is_primary)
     const chosen = options.contact_id ? contacts.find((c) => c.id === options.contact_id) : withEmail[0]
     if (options.contact_id && !chosen) throw invalid('That contact does not belong to this company')
     if (chosen && !chosen.email) throw invalid('That contact has no email address; use the manual submission channel')

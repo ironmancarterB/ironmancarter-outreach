@@ -6,6 +6,7 @@ import { AppError } from '../core/errors'
 import { nameKey, normalizeDomain } from '../core/normalize'
 import { runAI, type RouterDeps } from '../ai/router'
 import { addContact, createProspect, findDuplicates } from '../crm/prospects'
+import { departmentOf } from '../crm/leads'
 import { classifyEmail, extractPage, type ExtractedPage } from './extract'
 import { COMMON_PATHS, detectSignals, evidencePriority, pageSignals, rankLinks, SIGNAL_LABELS, type Finding, type Signal } from './evidence'
 import type { Fetcher, FetchResult } from './fetcher'
@@ -28,6 +29,8 @@ export interface ResearchResult {
   status: CandidateOutcome
   message: string
   prospectId?: number
+  qualified?: boolean
+  exclusionReason?: string | null
 }
 
 export interface ResearchDeps {
@@ -168,11 +171,12 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
     }
   }
   // Addresses already attached to another company are never reused.
-  const emails = [...found.values()].sort((a, b) => a.rank - b.rank).filter((e) => !get(db, 'SELECT 1 FROM contacts WHERE email = ?', e.email)).slice(0, 3)
+  const rankOf = (email: string) => departmentOf({ email, contact_tier: 'VERIFIED_DIRECT', contact_type: null }).rank
+  const emails = [...found.values()].sort((a, b) => rankOf(a.email) - rankOf(b.email) || a.rank - b.rank).filter((e) => !get(db, 'SELECT 1 FROM contacts WHERE email = ?', e.email)).slice(0, 3)
 
   // 5. Score, concept, and save.
   const category = get<{ slug: string; name: string }>(db, 'SELECT slug, name FROM categories WHERE id = ?', cand.category_id)!
-  const scored = scoreResearch({ categorySlug: category.slug, categoryName: category.name, signals, bestEmailRank: emails[0]?.rank ?? null, hasContactForm: !!formUrl })
+  const scored = scoreResearch({ categorySlug: category.slug, categoryName: category.name, signals, bestEmailRank: emails.length ? Math.min(...emails.map((e) => e.rank)) : null, hasContactForm: !!formUrl })
   const matches = titleMatches(cand.company_name, siteDomain, homePage)
   const programSignal = (['creator_program', 'affiliate_program', 'ambassador_program', 'influencer_mentions'] as Signal[]).some((s) => signals.has(s))
   const confidence = !matches ? 'low' : programSignal || emails.length ? 'high' : 'medium'

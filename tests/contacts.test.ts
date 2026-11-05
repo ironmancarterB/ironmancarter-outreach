@@ -10,7 +10,7 @@ import { contactStatus, discoverContacts, processContactRun, queueContactResearc
 import { addManualContact, reviewContact } from '../packages/research/contactReview'
 import { suggestApplicationUrl } from '../packages/pitch/facts'
 import { updateApplication } from '../packages/pitch/applications'
-import { approvePitch, generatePitch } from '../packages/pitch/service'
+import { generatePitch } from '../packages/pitch/service'
 import { fakeWeb, html } from './fakeWeb'
 import { freshDb } from './helpers'
 
@@ -258,13 +258,12 @@ describe('contact confidence and manual verification', () => {
     expect(evaluateEligibility(input({ contact_tier: 'VERIFIED_DIRECT', jurisdiction: 'unknown' })).status).toBe('needs_review')
   })
 
-  it('will not approve a pitch to a public, unverified contact', async () => {
+  it('will not draft a pitch to a public, unverified contact', async () => {
     const p = brand()
     run(db, 'INSERT INTO research_sources (prospect_id, url, title, kind, retrieved_at, snippet) VALUES (?, ?, ?, ?, ?, ?)', p.id, 'https://brand.test/creators', 'Creator program', 'sponsorship_evidence', new Date().toISOString(), 'Join the Brand Co Creator Program.')
     addManualContact(db, p.id, { email: 'press@brand.test', source_url: 'https://directory.test/brand', source_category: 'directory', evidence: 'Listed in a business directory' })
     reviewProspect(db, p.id, 'approved')
-    const pitch = await generatePitch(db, p.id, { channel: 'email' })
-    expect(() => approvePitch(db, pitch.id)).toThrow(/manual verification/)
+    await expect(generatePitch(db, p.id, { channel: 'email' })).rejects.toThrow(/manual verification/)
   })
 })
 

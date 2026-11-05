@@ -87,6 +87,8 @@ export interface Batch {
   done: number
   duplicates: number
   problems: number
+  qualified: number
+  researched: number
 }
 
 export interface BatchCandidate {
@@ -96,6 +98,7 @@ export interface BatchCandidate {
   category_name: string
   status: 'pending' | 'researching' | 'done' | 'duplicate' | 'unreachable' | 'blocked' | 'failed' | 'cancelled'
   message: string | null
+  qualified: number | null
   prospect_id: number | null
   fit_score: number | null
   review_status: string | null
@@ -284,6 +287,7 @@ export interface Activity {
 }
 
 export interface Overview {
+  leads: LeadMetrics
   outreach: {
     autopilotEnabled: boolean
     liveSendingEnabled: boolean
@@ -351,4 +355,55 @@ export interface GmailStatus {
 export interface GmailOperation {
   id: number; account_id: number | null; draft_row_id: number | null; operation: string; status: 'started' | 'ok' | 'failed' | 'uncertain'
   http_status: number | null; detail: string | null; started_at: string; finished_at: string | null
+}
+
+export type LeadConfidence = 'high' | 'medium' | 'unverified'
+export type OutreachStatus = 'needs_review' | 'ready_to_draft' | 'pitch_drafted' | 'pitch_approved' | 'gmail_draft' | 'contacted' | 'replied' | 'closed'
+
+export interface Lead {
+  id: number
+  company_name: string
+  website: string | null
+  domain: string | null
+  category_id: number | null
+  category_name: string | null
+  fit_score: number | null
+  review_status: 'pending' | 'approved' | 'rejected'
+  stage: StageId
+  actionable: boolean
+  has_qualifying_email: boolean
+  exclusion: { code: string; label: string; detail: string } | null
+  contact_id: number | null
+  email: string | null
+  department: string | null
+  source_url: string | null
+  verified_at: string | null
+  confidence: LeadConfidence | null
+  delivery_evidence: string
+  bounce_status: 'none' | 'bounced'
+  relevance: 'high' | 'medium' | 'none'
+  relevance_label: string
+  outreach_status: OutreachStatus
+  previously_contacted: boolean
+  last_contacted_at: string | null
+  needs_before_send: string[]
+}
+
+export interface LeadMetrics {
+  totalBrands: number
+  actionable: number
+  withQualifyingEmail: number
+  withoutUsableEmail: number
+  alreadyContacted: number
+  awaitingOutreach: number
+  awaitingReview: number
+  discoveryRate: number
+  excluded: Record<string, number>
+  research: { researched: number; qualifying: number; duplicates: number; rejected: number; rate: number }
+}
+
+export interface LeadsResponse {
+  metrics: LeadMetrics
+  actionable: Lead[]
+  excluded: Lead[]
 }

@@ -5,6 +5,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { all, get, getSetting, logActivity, nowIso, run, tx, type DB } from '../db'
 import { AppError, invalid, notFound } from '../core/errors'
 import { getProspect, setStage } from '../crm/prospects'
+import { contactQualification, emailGate, listLeads } from '../crm/leads'
+import { ensureMailDomains, type MailLookup } from '../research/mailDomain'
 import { mediaKitFilePath, type MediaKit } from '../mediakit/store'
 import type { RouterDeps } from '../ai/router'
 import { writeWithLocalAI } from './ai'
@@ -68,13 +70,19 @@ export const getPitch = (db: DB, id: number) => {
   return p
 }
 
-export async function generatePitch(db: DB, prospectId: number, rawOptions: Partial<PitchOptions> & Record<string, unknown>, deps: { ai?: RouterDeps; now?: Date } = {}) {
+export async function generatePitch(db: DB, prospectId: number, rawOptions: Partial<PitchOptions> & Record<string, unknown>, deps: { ai?: RouterDeps; now?: Date; mailLookup?: MailLookup } = {}) {
   const options = cleanOptions(rawOptions)
   const prospect = getProspect(db, prospectId)
   if (prospect.review_status !== 'approved') {
     throw new AppError(409, 'review_required', `Approve ${prospect.company_name} in the review queue before drafting a pitch.`)
   }
+  if (options.channel === 'email') await ensureMailDomains(db, prospectId, deps.mailLookup)
   const facts = gatherFacts(db, prospectId, options, deps.now)
+  // Only qualifying leads may enter the email workflow. Manual submissions through a portal are unaffected.
+  if (options.channel === 'email') {
+    const gate = emailGate(db, prospectId, facts.contact)
+    if (gate.length) throw new AppError(409, 'not_qualified', `Cannot draft this email: ${gate.join(' ')}`, gate)
+  }
 
   // Local AI only when you selected Ollama; the template otherwise, or when the AI draft is unusable.
   let draft = writeTemplate(facts)
@@ -148,6 +156,10 @@ export function evaluatePitch(db: DB, p: PitchRow) {
   const claims = validateClaims(db, p.prospect_id, JSON.parse(p.claims) as Claim[], p.body)
   for (const c of claims) for (const problem of c.problems) checks.push({ level: 'warning', code: 'evidence_changed', message: `${problem}.` })
   if (facts.prospect.reviewStatus !== 'approved') checks.push({ level: 'blocker', code: 'review', message: 'The company is no longer approved in the review queue.' })
+  if (p.channel === 'email' && facts.contact) {
+    const q = contactQualification(db, facts.contact, facts.prospect.domain)
+    if (!q.qualifies) checks.push({ level: 'blocker', code: 'contact_unqualified', message: `${facts.contact.email} does not qualify: ${q.reasons.join(' ')}` })
+  }
   return { facts, checks, wordCount, claims }
 }
 
@@ -234,13 +246,13 @@ export function outreachQueue(db: DB) {
   const ready = approved.map((p) => {
     const facts = gatherFacts(db, p.id, { channel: 'email' })
     const type = facts.program.type
-    const hasEmail = !!facts.contact?.email && facts.contact.verification_status === 'verified'
+    const hasEmail = !!facts.contact?.email && contactQualification(db, facts.contact, p.domain).qualifies
     return {
       ...p, programType: type, programLabel: facts.program.label, evidenceCount: facts.evidence.length, hasVerifiedEmail: hasEmail,
       suggestedChannel: hasEmail ? 'email' : facts.application ? 'manual_form' : 'email',
       priority: outreachPriority(p.fit_score, type, hasEmail),
     }
-  }).sort((a, b) => b.priority - a.priority)
+  }).filter((p) => p.hasVerifiedEmail || p.suggestedChannel === 'manual_form').sort((a, b) => Number(b.hasVerifiedEmail) - Number(a.hasVerifiedEmail) || b.priority - a.priority)
   const pitches = all<PitchRow & { company_name: string; fit_score: number | null }>(db, `
     SELECT x.*, p.company_name, p.fit_score FROM pitches x JOIN prospects p ON p.id = x.prospect_id
     WHERE x.status != 'superseded' ORDER BY x.updated_at DESC`)
@@ -258,7 +270,7 @@ export function outreachQueue(db: DB) {
     drafts: pitches.filter((x) => x.status === 'draft').map(summarize),
     approved: pitches.filter((x) => x.status === 'approved').map(summarize),
     rejected: pitches.filter((x) => x.status === 'rejected').map(summarize),
-    pendingReview: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'pending'")!.n,
+    pendingReview: listLeads(db).filter((l) => l.actionable && l.review_status === 'pending').length,
   }
 }
 

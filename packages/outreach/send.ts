@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { all, get, getSetting, logActivity, nowIso, run, setSetting, tx, type DB } from '../db'
 import { AppError, notFound } from '../core/errors'
 import { contactEligibility, getProspect, type Contact } from '../crm/prospects'
+import { contactQualification } from '../crm/leads'
 import { isDomainSuppressed, isEmailSuppressed } from '../crm/suppressions'
 import { evaluatePitch, getPitch } from '../pitch/service'
 import { accessToken, activeAccount, hasReadAccess, missingScopes, opFail, opFinish, opStart, type GmailDeps } from '../gmail/account'
@@ -171,6 +172,9 @@ async function evaluate(db: DB, deps: GmailDeps, target: SendTarget, now = new D
     const elig = contact ? contactEligibility(db, contact, prospect) : null
     add(checks, 'Contact verified and eligible', !!contact && contact.email === p.recipient_email && elig?.status === 'eligible',
       !contact ? 'No contact on the pitch' : contact.email !== p.recipient_email ? 'The pitch recipient no longer matches the contact' : `${elig!.status.replace('_', ' ')}: ${elig!.reasons.join('; ')}`)
+    const qualified = contact ? contactQualification(db, contact, prospect.domain) : null
+    add(checks, 'Public, sourced contact (no known bounce)', !!qualified?.qualifies,
+      !qualified ? 'No contact on the pitch' : qualified.qualifies ? `${qualified.confidence.toUpperCase()} confidence: published, with its source on record. This does not guarantee the mailbox accepts mail.` : qualified.reasons.join(' '))
     draft = get<DraftRow>(db, "SELECT * FROM gmail_drafts WHERE prospect_id = ? AND kind = 'pitch' AND status IN ('creating', 'created', 'uncertain')", p.prospect_id) ?? null
     expectedBody = composeBody(db, 'pitch', p.body)
     subject = p.subject ?? ''

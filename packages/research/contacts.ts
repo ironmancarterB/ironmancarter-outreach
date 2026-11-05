@@ -438,9 +438,12 @@ export function queueContactResearch(db: DB, prospectId: number, opts: { refresh
   return { id, alreadyQueued: false }
 }
 
-export async function processContactRun(db: DB, deps: { fetcher: Fetcher }): Promise<boolean> {
+// prospectId: run that company's queued research now (research batches need the answer before moving on).
+export async function processContactRun(db: DB, deps: { fetcher: Fetcher }, prospectId?: number): Promise<boolean> {
   const runRow = tx(db, () => {
-    const r = get<{ id: number; prospect_id: number; refresh: number }>(db, "SELECT id, prospect_id, refresh FROM contact_research_runs WHERE status = 'queued' ORDER BY id LIMIT 1")
+    const r = prospectId
+      ? get<{ id: number; prospect_id: number; refresh: number }>(db, "SELECT id, prospect_id, refresh FROM contact_research_runs WHERE status = 'queued' AND prospect_id = ? ORDER BY id LIMIT 1", prospectId)
+      : get<{ id: number; prospect_id: number; refresh: number }>(db, "SELECT id, prospect_id, refresh FROM contact_research_runs WHERE status = 'queued' ORDER BY id LIMIT 1")
     if (r) run(db, "UPDATE contact_research_runs SET status = 'running', attempts = attempts + 1, started_at = ? WHERE id = ?", nowIso(), r.id)
     return r
   })

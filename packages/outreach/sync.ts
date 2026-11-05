@@ -5,6 +5,7 @@
 // re-running a sync (or one interrupted by a crash) never records a message twice.
 import { all, get, logActivity, nowIso, run, type DB } from '../db'
 import { addSuppression } from '../crm/suppressions'
+import { bouncedRecipient, bounceSeverity } from '../crm/leads'
 import { emailDomain, normalizeEmail } from '../core/normalize'
 import { accessToken, requireReadAccess, type GmailDeps, type MailAccount } from '../gmail/account'
 import { syncDrafts, type DraftRow } from '../gmail/drafts'
@@ -101,6 +102,13 @@ async function ingest(ctx: Ctx, thread: ThreadRow, m: GmailMessage, reviewReason
     ctx.replies++
     touchContactDates(db, thread.prospect_id, 'inbound', at)
     autoAdvance(db, thread.prospect_id, 'replied')
+  }
+  if (bounce) {
+    const recipient = bouncedRecipient(db, thread.gmail_thread_id)
+    if (recipient && bounceSeverity(text) === 'permanent') {
+      addSuppression(db, 'email', recipient, 'Hard bounce: the mail server rejected this address', 'bounce')
+      logActivity(db, 'reply.hard_bounce', `${recipient} bounced. Added to the do-not-contact list; it can no longer be drafted or sent to.`, { prospectId: thread.prospect_id })
+    }
   }
   if (c?.optOut && from) {
     addSuppression(db, 'email', from, 'Asked not to be contacted (reply in Gmail)', 'opt_out')

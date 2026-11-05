@@ -87,11 +87,11 @@ function Ready({ data, onChange }: { data: OutreachQueue; onChange: () => void }
                     <Badge tone={PROGRAM_TONE[p.programType]}>{p.programLabel}</Badge>
                   </div>
                   <div className="mt-0.5 text-xs text-zinc-500">
-                    {p.category_name} · {p.evidenceCount} evidence source{p.evidenceCount === 1 ? '' : 's'} · {p.hasVerifiedEmail ? 'verified email' : p.suggestedChannel === 'manual_form' ? 'creator portal / form' : 'no verified email'}
+                    {p.category_name} · {p.evidenceCount} evidence source{p.evidenceCount === 1 ? '' : 's'} · {p.hasVerifiedEmail ? 'qualifying public email' : 'portal or form only, no qualifying email'}
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant={p.suggestedChannel === 'email' ? 'primary' : 'secondary'} disabled={busy !== null} onClick={() => draft(p.id, 'email')}>
+                  <Button size="sm" variant={p.suggestedChannel === 'email' ? 'primary' : 'secondary'} disabled={busy !== null || !p.hasVerifiedEmail} onClick={() => draft(p.id, 'email')}>
                     {busy === p.id ? 'Drafting…' : 'Draft email'}
                   </Button>
                   <Button size="sm" variant={p.suggestedChannel === 'manual_form' ? 'primary' : 'secondary'} disabled={busy !== null} onClick={() => draft(p.id, 'manual_form')}>Draft manual message</Button>

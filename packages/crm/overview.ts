@@ -5,6 +5,7 @@ import { paidSpendThisMonth } from '../ai/router'
 import { getDefaultMediaKit } from '../mediakit/store'
 import { contactEligibility, type Contact, type Prospect } from './prospects'
 import { limitsStatus } from '../outreach/send'
+import { leadMetrics, listLeads } from './leads'
 
 export function overview(db: DB, now = new Date()) {
   const tierSlug = getSetting<string>(db, 'outreach.sendingTier')
@@ -38,7 +39,9 @@ export function overview(db: DB, now = new Date()) {
       count(CASE WHEN stage = 'won' THEN 1 END) AS wonCount
     FROM prospects`)!
 
+  const leads = listLeads(db)
   return {
+    leads: leadMetrics(db, leads),
     outreach: {
       autopilotEnabled: autopilot,
       liveSendingEnabled: liveSending,
@@ -58,7 +61,7 @@ export function overview(db: DB, now = new Date()) {
       manualContactQueue: manualQueue,
       activeNegotiations: ACTIVE_DEAL_STAGES.reduce((n, s) => n + stageCounts[s], 0),
       followUpsScheduled: get<{ n: number }>(db, 'SELECT count(*) AS n FROM prospects WHERE next_follow_up_date >= ?', today)!.n,
-      pendingReview: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'pending'")!.n,
+      pendingReview: leads.filter((l) => l.actionable && l.review_status === 'pending').length,
       approved: get<{ n: number }>(db, "SELECT count(*) AS n FROM prospects WHERE review_status = 'approved'")!.n,
     },
     repliesNeedingAttention: get<{ n: number }>(db, 'SELECT count(*) AS n FROM email_threads WHERE needs_review = 1')!.n,

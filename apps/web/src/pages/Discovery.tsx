@@ -5,17 +5,20 @@ import { dateTime, relative } from '../lib/format'
 import { navigate } from '../lib/router'
 import type { Batch, BatchCandidate, Category, PoolEntry, PoolSummaryRow, ProspectDetail as Detail, ProspectListItem, ResearchStatus } from '../lib/types'
 import ProspectDetail from './ProspectDetail'
+import { ActionableLeads, ExcludedBrands } from './Leads'
 
 const TABS = [
+  { id: 'leads', label: 'Actionable leads' },
   { id: 'research', label: 'Run research' },
   { id: 'review', label: 'Review queue' },
+  { id: 'excluded', label: 'Excluded' },
   { id: 'candidates', label: 'Candidates' },
   { id: 'manual', label: 'Manual contact queue' },
 ] as const
 type TabId = (typeof TABS)[number]['id']
 
 export default function Discovery({ tab, openId }: { tab?: string; openId: number | null }) {
-  const current = (TABS.find((t) => t.id === tab)?.id ?? 'research') as TabId
+  const current = (TABS.find((t) => t.id === tab)?.id ?? 'leads') as TabId
   const status = useApi<ResearchStatus>('/api/research/status')
   usePoll(status.reload, 5000, true)
   const { data: categories } = useApi<Category[]>('/api/categories')
@@ -24,7 +27,7 @@ export default function Discovery({ tab, openId }: { tab?: string; openId: numbe
     <>
       <PageHeader
         title="Brand Discovery"
-        subtitle="Researches official brand websites for creator-partnership evidence and published business contacts. Reads public pages only; obeys robots.txt; $0."
+        subtitle="Finds brands with a publicly listed business email and records where each one was published. Reads public pages only; obeys robots.txt; $0."
         actions={status.data && (
           <span className="flex items-center gap-2 text-sm">
             <span className={`h-2 w-2 rounded-full ${status.data.workerRunning ? 'bg-emerald-500' : 'bg-zinc-400'}`} aria-hidden />
@@ -36,6 +39,8 @@ export default function Discovery({ tab, openId }: { tab?: string; openId: numbe
       {status.data && !status.data.workerRunning && (
         <div className="mb-5"><Notice tone="amber" title="The research worker isn't running">Batches wait until it starts. It starts with <code>npm run dev</code> (or <code>npm run worker</code> on its own).</Notice></div>
       )}
+      {current === 'leads' && <ActionableLeads categories={categories ?? []} />}
+      {current === 'excluded' && <ExcludedBrands />}
       {current === 'research' && <RunResearch onChange={status.reload} />}
       {current === 'review' && <ReviewQueue onChange={status.reload} />}
       {current === 'candidates' && <Candidates categories={categories ?? []} />}
@@ -61,12 +66,13 @@ function RunResearch({ onChange }: { onChange: () => void }) {
   const enabled = pool.data?.summary.filter((c) => c.enabled) ?? []
   const chosen = selected ?? enabled.map((c) => c.id)
   const capacity = enabled.filter((c) => chosen.includes(c.id)).reduce((n, c) => n + Math.min(c.available, c.research_quota), 0)
+  const limit = Math.min(size * 4, capacity)
 
   const start = async () => {
     setBusy(true)
     try {
       const r = await api.post<{ batch: Batch }>('/api/research/batches', { size, category_ids: chosen })
-      toast(`Queued batch #${r.batch.id} with ${r.batch.total} brands`)
+      toast(`Batch #${r.batch.id} is looking for up to ${size} brands with qualifying emails`)
       setOpenBatch(r.batch.id)
       batches.reload(); pool.reload(); onChange()
     } catch (e) {
@@ -88,7 +94,7 @@ function RunResearch({ onChange }: { onChange: () => void }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
-        <Card title="New research batch">
+        <Card title="Find brands with qualifying emails">
           {!pool.data ? <Loading /> : (
             <div className="space-y-4">
               <div className="flex flex-wrap gap-2" role="group" aria-label="Batch size">
@@ -109,20 +115,21 @@ function RunResearch({ onChange }: { onChange: () => void }) {
                 ))}
               </div>
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Up to <strong>{Math.min(size, capacity)}</strong> brands can be queued with these categories and quotas.
-                {capacity < size && ' The batch will be smaller than requested rather than padded with weaker or invented candidates.'}
+                Looks for up to <strong>{size}</strong> brands with qualifying emails, researching at most <strong>{limit}</strong> candidates with these categories and quotas. It stops as soon as it has {size}.
+                {limit < size && ' There are fewer candidates than the target, so expect fewer results.'} Empty slots are never filled with unverified contacts.
               </p>
-              <div className="flex justify-end"><Button variant="primary" onClick={start} disabled={busy || !!active || !chosen.length || capacity === 0}>{active ? 'A batch is running' : `Research ${Math.min(size, capacity)} brands`}</Button></div>
+              <div className="flex justify-end"><Button variant="primary" onClick={start} disabled={busy || !!active || !chosen.length || capacity === 0}>{active ? 'A batch is running' : `Find up to ${size} brands`}</Button></div>
             </div>
           )}
         </Card>
         <Card title="How research works">
           <ul className="list-disc space-y-1.5 pl-5 text-sm text-zinc-600 dark:text-zinc-400">
-            <li>Visits each brand's official site and up to 7 partnership/contact pages, one request per site every 1.5 s.</li>
+            <li>Visits each brand's official site and its partnership, press and contact pages, one request per site every 1.5 s.</li>
             <li>Obeys robots.txt. Blocked sites are recorded as blocked, never bypassed.</li>
-            <li>Keeps only business mailboxes (partnerships@, creators@, press@…) published on the brand's own domain. Personal addresses are never stored.</li>
+            <li>Keeps only business mailboxes actually published by the brand or its confirmed agency. Addresses are never guessed, and personal addresses are never stored.</li>
+            <li>Checks with free public DNS that the domain can receive mail. That does not prove a mailbox exists, so nothing is called deliverable until the address has replied.</li>
             <li>Every finding keeps its page URL, the exact text and the fetch time.</li>
-            <li>Results wait in the review queue for your approval.</li>
+            <li>Brands with a qualifying email wait in the review queue for your approval. The rest go to Excluded with the reason.</li>
           </ul>
         </Card>
       </div>
@@ -135,12 +142,15 @@ function RunResearch({ onChange }: { onChange: () => void }) {
                 <div className="flex flex-wrap items-center gap-3 px-5 py-3">
                   <button className="font-medium hover:underline" onClick={() => setOpenBatch(openBatch === b.id ? null : b.id)}>Batch #{b.id}</button>
                   <Badge tone={b.status === 'completed' ? 'green' : b.status === 'running' || b.status === 'queued' ? 'blue' : 'gray'}>{b.status}</Badge>
-                  <span className="text-sm text-zinc-500">{b.total - b.remaining}/{b.total} researched · {b.done} added · {b.duplicates} duplicates · {b.problems} unreachable/blocked</span>
+                  <span className="text-sm text-zinc-500">
+                    <strong className="text-zinc-700 dark:text-zinc-300">{b.qualified} of {b.requested_size}</strong> with qualifying emails · {b.researched} researched · {Math.max(0, b.researched - b.qualified - b.duplicates)} rejected · {b.duplicates} duplicates
+                    {b.researched - b.duplicates > 0 && ` · ${Math.round((b.qualified / (b.researched - b.duplicates)) * 100)}% discovery rate`}
+                  </span>
                   <span className="ml-auto text-xs text-zinc-400">{dateTime(b.created_at)}</span>
                   {(b.status === 'running' || b.status === 'queued') && <Button size="sm" onClick={() => cancel(b.id)}>Cancel</Button>}
                 </div>
                 {(b.status === 'running' || b.status === 'queued') && (
-                  <div className="mx-5 mb-3 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800"><div className="h-1.5 rounded-full bg-brand-500 transition-all" style={{ width: `${b.total ? ((b.total - b.remaining) / b.total) * 100 : 0}%` }} /></div>
+                  <div className="mx-5 mb-3 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800"><div className="h-1.5 rounded-full bg-brand-500 transition-all" style={{ width: `${Math.min(100, (b.qualified / b.requested_size) * 100)}%` }} /></div>
                 )}
                 {b.shortfall_note && openBatch === b.id && <div className="mx-5 mb-3"><Notice tone="amber">{b.shortfall_note}</Notice></div>}
                 {openBatch === b.id && <BatchDetail id={b.id} live={b.status === 'running' || b.status === 'queued'} />}
@@ -173,7 +183,7 @@ function BatchDetail({ id, live }: { id: number; live: boolean }) {
                   : <span className="font-medium">{c.company_name}</span>}
                 <div className="text-xs text-zinc-500">{c.domain} · {c.category_name}</div>
               </td>
-              <td className="py-2 pr-3"><Badge tone={STATUS_TONE[c.status]}>{c.status}</Badge></td>
+              <td className="py-2 pr-3">{c.status === 'done' ? <Badge tone={c.qualified ? 'green' : 'gray'}>{c.qualified ? 'qualifying email' : 'excluded'}</Badge> : <Badge tone={STATUS_TONE[c.status]}>{c.status}</Badge>}</td>
               <td className="py-2 pr-3">{c.fit_score != null && <TierBadge tier={c.fit_score >= 80 ? 'A' : c.fit_score >= 60 ? 'B' : 'C'} score={c.fit_score} />}</td>
               <td className="py-2 text-xs text-zinc-500">{c.message}</td>
             </tr>
@@ -189,7 +199,7 @@ function BatchDetail({ id, live }: { id: number; live: boolean }) {
 function ReviewQueue({ onChange }: { onChange: () => void }) {
   const toast = useToast()
   const [sort, setSort] = useState('score')
-  const { data, error, reload } = useApi<ProspectListItem[]>(`/api/prospects?review=pending&sort=${sort}`)
+  const { data, error, reload } = useApi<ProspectListItem[]>(`/api/prospects?review=pending&lead=actionable&sort=${sort}`)
   const decide = async (p: ProspectListItem, decision: 'approved' | 'rejected') => {
     let note: string | null = null
     if (decision === 'rejected') {
@@ -208,14 +218,14 @@ function ReviewQueue({ onChange }: { onChange: () => void }) {
   if (!data) return <Loading />
   return (
     <div className="space-y-4">
-      <Notice>Approving a company only makes it eligible for future drafting (Phase 3). Nothing is sent, and contacts outside the US or with unknown jurisdiction still need individual review.</Notice>
+      <Notice>Only brands with a qualifying email appear here; the rest are under Excluded. Approving a brand only lets you draft to it. Nothing is sent, and contacts outside the US or with unknown jurisdiction still need individual review.</Notice>
       <div className="flex items-center gap-2 text-sm">
         <span className="text-zinc-500">Sort by</span>
         <Select className="w-auto" value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="score">Fit score</option><option value="updated">Most recent</option><option value="name">Name</option>
         </Select>
       </div>
-      {data.length === 0 ? <Empty title="Nothing to review">Run a research batch; results land here.</Empty> : (
+      {data.length === 0 ? <Empty title="Nothing to review">Brands with a qualifying email land here after a research batch.</Empty> : (
         <div className="grid gap-3">
           {data.map((p) => (
             <Card key={p.id}>
