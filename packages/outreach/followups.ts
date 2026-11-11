@@ -47,6 +47,7 @@ export interface SendRow {
   content_sha256: string
   attachment_sha256: string | null
   status: 'sending' | 'sent' | 'uncertain' | 'not_sent' | 'failed'
+  initiated_by: 'you' | 'autopilot'
   gmail_message_id: string | null
   gmail_thread_id: string | null
   rfc822_message_id: string | null
@@ -136,7 +137,7 @@ export function scheduleFollowUps(db: DB, send: SendRow) {
     const first = get<{ due_at: string }>(db, `SELECT due_at FROM follow_ups WHERE initial_send_id = ? ORDER BY sequence LIMIT 1`, send.id)
     // Your own reminder date is kept if you set one.
     if (first) run(db, 'UPDATE prospects SET next_follow_up_date = COALESCE(next_follow_up_date, ?) WHERE id = ?', first.due_at.slice(0, 10), send.prospect_id)
-    logActivity(db, 'followup.scheduled', `Scheduled ${created} follow-up${created === 1 ? '' : 's'} for review (${cfg.firstAfterBusinessDays} and ${cfg.secondAfterBusinessDays} business days). None will be sent automatically.`, { prospectId: send.prospect_id })
+    logActivity(db, 'followup.scheduled', `Scheduled ${created} follow-up${created === 1 ? '' : 's'} for review (${cfg.firstAfterBusinessDays} and ${cfg.secondAfterBusinessDays} business days). ${getSetting<boolean>(db, 'outreach.autopilotEnabled') ? ' Autopilot sends them when due unless the brand replies, opts out or bounces.' : ' None will be sent automatically.'}`, { prospectId: send.prospect_id })
   }
   return created
 }

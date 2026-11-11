@@ -121,7 +121,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   // ---------- System ----------
   // Sending code exists (manual, confirmed sends only); whether it may be used is liveSendingEnabled.
   app.get('/api/health', async () => ({
-    ok: true, sendingCodePresent: true, liveSendingEnabled: getSetting<boolean>(db, 'outreach.liveSendingEnabled'), autopilot: false,
+    ok: true, sendingCodePresent: true, liveSendingEnabled: getSetting<boolean>(db, 'outreach.liveSendingEnabled'), autopilot: getSetting<boolean>(db, 'outreach.autopilotEnabled'),
     emergencyStop: getSetting<{ active: boolean }>(db, 'outreach.emergencyStop').active,
   }))
 

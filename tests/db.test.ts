@@ -6,7 +6,7 @@ describe('database foundation', () => {
   it('applies migrations once and is idempotent', () => {
     const db = freshDb()
     expect(migrate(db)).toEqual([])
-    expect(all<{ version: number }>(db, 'SELECT version FROM schema_migrations ORDER BY version')).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }])
+    expect(all<{ version: number }>(db, 'SELECT version FROM schema_migrations ORDER BY version')).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }])
   })
 
   it('seeds safe defaults: no sending, no paid AI, $0 budget', () => {

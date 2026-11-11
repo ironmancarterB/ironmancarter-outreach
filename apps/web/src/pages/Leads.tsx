@@ -49,6 +49,16 @@ export function ActionableLeads({ categories }: { categories: Category[] }) {
     && (!relevance || l.relevance === relevance) && (!outreach || l.outreach_status === outreach)), [data, confidence, category, relevance, outreach])
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loading />
+  // Only you can confirm where a recipient is; the app never infers it from the company's headquarters.
+  const setCountry = async (l: Lead, country: string) => {
+    try {
+      await api.patch(`/api/contacts/${l.contact_id}`, { jurisdiction: country })
+      toast(`${l.email}: recipient country set to ${country}`)
+      reload()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
   const approve = async (l: Lead) => {
     try {
       await api.post(`/api/prospects/${l.id}/review`, { decision: 'approved' })
@@ -116,6 +126,12 @@ export function ActionableLeads({ categories }: { categories: Category[] }) {
                     {l.review_status === 'pending' ? <Button size="sm" onClick={() => approve(l)}>Approve</Button>
                       : <a className="text-brand-600 hover:underline" href="#/drafts">Open in Email Drafts</a>}
                     {l.needs_before_send.length > 0 && <div className="mt-1 max-w-56 text-amber-700 dark:text-amber-400">Before sending: {l.needs_before_send.join('; ')}</div>}
+                    {l.contact_id && l.needs_before_send.some((r) => /jurisdiction/i.test(r)) && (
+                      <Select className="mt-1 w-auto text-xs" value="" aria-label={`Recipient country for ${l.email}`} onChange={(e) => e.target.value && setCountry(l, e.target.value)}>
+                        <option value="">Confirm recipient country…</option>
+                        {['US', 'CA', 'UK', 'DE', 'FR', 'NL', 'SE', 'AU', 'HK', 'SG', 'JP', 'IL', 'LT', 'RO'].map((c) => <option key={c} value={c}>{c}</option>)}
+                      </Select>
+                    )}
                   </td>
                 </tr>
               ))}

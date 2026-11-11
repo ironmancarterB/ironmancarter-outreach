@@ -44,7 +44,8 @@ const obj = (v: unknown) => {
 
 // Locked settings and the reason shown when someone tries to change them.
 export const LOCKED: Record<string, string> = {
-  'outreach.autopilotEnabled': 'Autopilot (automatic sending) is not authorized. Every email is sent by you, one at a time.',
+  'outreach.autopilotEnabled': 'Switch autopilot on or off in Outreach Controls (it checks Gmail and the safety checklist first).',
+  'outreach.autopilotPause': 'Set by autopilot when it pauses itself.',
   'outreach.liveSendingEnabled': 'Live sending is switched on only through the activation step in Outreach Controls, after its checklist passes and you confirm it.',
   'outreach.mode': 'The operating mode is fixed; sending is manual only.',
   'outreach.sendingTier': 'Sending tiers change only with your explicit approval.',
@@ -89,6 +90,16 @@ export const VALIDATORS: Record<string, Validator> = {
   'outreach.holidays': (v) => {
     if (!Array.isArray(v) || v.length > 100 || v.some((d) => typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d))) throw invalid('Expected up to 100 dates (YYYY-MM-DD)')
     return [...new Set(v as string[])].sort()
+  },
+  'outreach.autopilot': (v) => {
+    const o = obj(v)
+    if (typeof o.dryRun !== 'boolean') throw invalid('dryRun must be true or false')
+    const newPerDay = num(1, 5)(o.newPerDay) as number   // more than 5 a day needs your explicit approval in code
+    return {
+      dryRun: o.dryRun, newPerDay: Math.round(newPerDay), sendGapMinutes: Math.round(num(10, 240)(o.sendGapMinutes) as number),
+      syncEveryMinutes: Math.round(num(5, 120)(o.syncEveryMinutes) as number), maxErrorsPerDay: Math.round(num(1, 10)(o.maxErrorsPerDay) as number),
+      maxBouncesPerWeek: Math.round(num(1, 10)(o.maxBouncesPerWeek) as number),
+    }
   },
   'outreach.dailyLimits': (v) => {
     const o = obj(v)

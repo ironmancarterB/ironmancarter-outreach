@@ -1,9 +1,9 @@
-// Outreach Controls: STOP ALL OUTREACH, the live-sending activation gate, daily safety ceilings and holidays.
-// Autopilot (automatic sending) is not available; every email is sent by you, one at a time.
+// Outreach Controls: STOP ALL OUTREACH, the live-sending activation gate, autopilot, daily safety ceilings and holidays.
 import { useState } from 'react'
 import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Notice, PageHeader, useToast } from '../components/ui'
 import { api, useApi } from '../lib/api'
 import { dateTime } from '../lib/format'
+import AutopilotPanel from './AutopilotPanel'
 
 interface Controls {
   liveSendingEnabled: boolean
@@ -38,7 +38,7 @@ export default function Autopilot() {
   const ready = data.checklist.every((c) => c.ok)
   return (
     <>
-      <PageHeader title="Outreach Controls" subtitle="Manual send mode. Autopilot, scheduled sending and bulk sending are not available." />
+      <PageHeader title="Outreach Controls" subtitle="STOP ALL OUTREACH pauses everything, including autopilot. Bulk sending is not available." />
       <div className="space-y-5">
         <Card title="Emergency stop" actions={data.emergencyStop.active ? <Badge tone="red">STOPPED</Badge> : <Badge tone="green">Not stopped</Badge>}>
           {data.emergencyStop.active ? (
@@ -49,10 +49,12 @@ export default function Autopilot() {
           ) : (
             <div className="flex flex-wrap items-center gap-3">
               <Button variant="danger" className="px-6 py-3 text-base" disabled={busy} onClick={stop}>STOP ALL OUTREACH</Button>
-              <p className="text-sm text-zinc-500">Blocks every send immediately (including emails you were about to confirm). Nothing is deleted.</p>
+              <p className="text-sm text-zinc-500">Blocks every send immediately, manual and autopilot. Nothing is deleted.</p>
             </div>
           )}
         </Card>
+
+        <AutopilotPanel />
 
         <Card title="Live sending" actions={data.liveSendingEnabled ? <Badge tone="amber">ON (manual)</Badge> : <Badge tone="gray">OFF</Badge>}>
           <div className="space-y-4 text-sm">

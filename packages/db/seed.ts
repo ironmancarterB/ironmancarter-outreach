@@ -29,6 +29,9 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   // Days skipped when counting business days for follow-ups (YYYY-MM-DD).
   'outreach.holidays': [],
   'outreach.dailyLimits': { newPerDay: 10, followUpsPerDay: 5, totalPerDay: 15 },
+  // Autopilot (automatic sending). Switched on only through Outreach Controls; new first emails are hard-capped at 5 a day.
+  'outreach.autopilot': { dryRun: true, newPerDay: 5, sendGapMinutes: 20, syncEveryMinutes: 15, maxErrorsPerDay: 3, maxBouncesPerWeek: 2 },
+  'outreach.autopilotPause': { reason: null, at: null },
   // STOP ALL OUTREACH. While active, no send can start.
   'outreach.emergencyStop': { active: false, at: null, reason: null },
 

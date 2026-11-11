@@ -163,6 +163,9 @@ async function evaluate(db: DB, deps: GmailDeps, target: SendTarget, now = new D
     add(checks, 'Company is ready for first contact', stageOk, `Stage: ${prospect.stage.replace(/_/g, ' ')}`)
     const prior = get<{ status: string }>(db, "SELECT status FROM send_attempts WHERE prospect_id = ? AND kind = 'initial' AND status IN ('sending', 'sent', 'uncertain')", p.prospect_id)
     add(checks, 'One outreach sequence per company', !prior, prior ? `A first email is already ${prior.status}` : 'No earlier outreach')
+    const emailedBefore = p.recipient_email ? get<{ company_name: string | null }>(db, `SELECT pr.company_name FROM send_attempts s LEFT JOIN prospects pr ON pr.id = s.prospect_id
+      WHERE s.recipient = ? AND s.kind = 'initial' AND s.status IN ('sending', 'sent', 'uncertain') LIMIT 1`, p.recipient_email) : undefined
+    add(checks, 'Never emailed this person before', !emailedBefore, emailedBefore ? `${p.recipient_email} was already contacted${emailedBefore.company_name ? ` for ${emailedBefore.company_name}` : ''}` : 'First contact with this address')
     const blockers = p.channel === 'email' && p.status === 'approved' ? evaluatePitch(db, p).checks.filter((c) => c.level === 'blocker') : []
     add(checks, 'Pitch approved and passes every check', p.channel === 'email' && p.status === 'approved' && !blockers.length,
       p.status !== 'approved' ? `Pitch is ${p.status}` : blockers.length ? blockers.map((b) => b.message).join(' ') : `Approved pitch v${p.version}`)
@@ -264,9 +267,22 @@ export async function confirmSend(db: DB, deps: GmailDeps, input: { token?: unkn
   if (e.draft?.id !== pending.draftRowId || e.contentSha !== pending.contentSha || e.draft.gmail_message_id !== pending.gmailMessageId) {
     throw new AppError(409, 'changed', 'The Gmail draft changed since you reviewed it. Nothing was sent; review it again.')
   }
+  return deliver(db, deps, e, pending.target, { recipient: pending.recipient, subject: pending.subject, contentSha: pending.contentSha, gmailDraftId: pending.gmailDraftId }, 'you')
+}
+
+// Autopilot: the same checks as a manual send, including a fresh read-back of the Gmail draft, and the same
+// duplicate protection; only the human confirmation step is replaced by autopilot being switched on.
+export async function autopilotSend(db: DB, deps: GmailDeps, target: SendTarget): Promise<{ sent: SendRow | null; failing: Check[] }> {
+  if (!getSetting<boolean>(db, 'outreach.autopilotEnabled')) throw new AppError(409, 'autopilot_off', 'Autopilot is switched off.')
+  const e = await evaluate(db, deps, target)
+  if (!e.ready || !e.draft?.gmail_draft_id || !e.contentSha || !e.preview) return { sent: null, failing: e.checks.filter((c) => !c.ok) }
+  const sent = await deliver(db, deps, e, target, { recipient: e.preview.to, subject: e.preview.subject, contentSha: e.contentSha, gmailDraftId: e.draft.gmail_draft_id }, 'autopilot')
+  return { sent, failing: [] }
+}
+
+async function deliver(db: DB, deps: GmailDeps, e: Evaluation, t: SendTarget, pending: { recipient: string; subject: string; contentSha: string; gmailDraftId: string }, by: 'you' | 'autopilot') {
   if (stopState(db).active) throw new AppError(409, 'stopped', 'STOP ALL OUTREACH is active. Nothing was sent.')
   const { account, token: access } = await accessToken(db, deps)
-  const t = pending.target
   const key = t.kind === 'initial' ? `initial:p${e.prospectId}` : `follow_up:${t.followUpId}`
   const draft = e.draft!
 
@@ -274,9 +290,9 @@ export async function confirmSend(db: DB, deps: GmailDeps, input: { token?: unkn
     const now = nowIso()
     // The unique indexes refuse a second live send for this message or a second first email to this company.
     const sendId = run(db, `INSERT INTO send_attempts (kind, prospect_id, contact_id, pitch_id, follow_up_id, draft_row_id, account_id, idempotency_key, recipient, subject,
-      content_sha256, attachment_sha256, status, day_key, confirmed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', ?, ?, ?, ?)`,
+      content_sha256, attachment_sha256, status, day_key, confirmed_at, created_at, updated_at, initiated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', ?, ?, ?, ?, ?)`,
       t.kind, e.prospectId, e.contactId, t.kind === 'initial' ? t.pitchId : null, t.kind === 'follow_up' ? t.followUpId : null, draft.id, account.id, key,
-      pending.recipient, pending.subject, pending.contentSha, draft.attachment_sha256, dayKey(new Date(), calendar(db).timezone), now, now, now).lastId
+      pending.recipient, pending.subject, pending.contentSha, draft.attachment_sha256, dayKey(new Date(), calendar(db).timezone), now, now, now, by).lastId
     return { sendId, op: opStart(db, 'send_draft', account.id, draft.id, `send ${sendId} to ${pending.recipient}`) }
   })
 
@@ -306,7 +322,8 @@ export async function confirmSend(db: DB, deps: GmailDeps, input: { token?: unkn
 async function afterSent(db: DB, deps: GmailDeps, s: SendRow) {
   try {
     tx(db, () => {
-      if (s.draft_row_id) run(db, "UPDATE gmail_drafts SET status = 'sent', sync_note = ?, updated_at = ? WHERE id = ?", `Sent ${s.origin === 'gmail' ? 'by you from Gmail' : 'by the app after your confirmation'} (send ${s.id}).`, nowIso(), s.draft_row_id)
+      const how = s.origin === 'gmail' ? 'by you from Gmail' : s.initiated_by === 'autopilot' ? 'automatically by autopilot' : 'by the app after your confirmation'
+      if (s.draft_row_id) run(db, "UPDATE gmail_drafts SET status = 'sent', sync_note = ?, updated_at = ? WHERE id = ?", `Sent ${how} (send ${s.id}).`, nowIso(), s.draft_row_id)
       const msgRow = s.draft_row_id ? get<{ id: number }>(db, "SELECT id FROM email_messages WHERE draft_row_id = ? AND kind = 'draft'", s.draft_row_id) : undefined
       const kind = s.kind === 'initial' ? 'sent' : 'follow_up'
       if (msgRow && s.gmail_message_id) {
@@ -326,7 +343,7 @@ async function afterSent(db: DB, deps: GmailDeps, s: SendRow) {
       } else if (s.follow_up_id) {
         run(db, "UPDATE follow_ups SET status = 'sent', sent_send_id = ?, updated_at = ? WHERE id = ?", s.id, nowIso(), s.follow_up_id)
       }
-      logActivity(db, 'send.sent', `${s.origin === 'gmail' ? 'You sent' : 'Sent'} the ${s.kind === 'initial' ? 'first email' : 'follow-up'} to ${s.recipient}${s.origin === 'gmail' ? ' from Gmail' : ' after your confirmation'}.`, { prospectId: s.prospect_id, data: { sendId: s.id } })
+      logActivity(db, 'send.sent', `${s.origin === 'gmail' ? 'You sent' : 'Sent'} the ${s.kind === 'initial' ? 'first email' : 'follow-up'} to ${s.recipient}${s.origin === 'gmail' ? ' from Gmail' : s.initiated_by === 'autopilot' ? ' automatically (autopilot)' : ' after your confirmation'}.`, { prospectId: s.prospect_id, data: { sendId: s.id } })
     })
   } catch (err) {
     logActivity(db, 'send.bookkeeping_error', `Sent to ${s.recipient}, but updating the CRM failed: ${(err as Error).message}`, { prospectId: s.prospect_id })

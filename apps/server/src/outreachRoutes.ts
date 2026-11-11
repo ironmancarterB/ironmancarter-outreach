@@ -1,5 +1,5 @@
-// Phase 5 routes: conversations, follow-ups, manual sending and the outreach controls.
-// There is no bulk-send route and nothing here sends without the prepare → confirm sequence.
+// Phase 5 routes: conversations, follow-ups, manual sending, autopilot and the outreach controls.
+// There is no bulk-send route. Manual sends need prepare → confirm; autopilot sends only from the worker's schedule.
 import type { FastifyInstance } from 'fastify'
 import { getSetting, type DB } from '../../../packages/db'
 import { invalid } from '../../../packages/core/errors'
@@ -16,6 +16,7 @@ import {
   type SendTarget,
 } from '../../../packages/outreach/send'
 import { checkThreadBeforeFollowUp, syncConversations } from '../../../packages/outreach/sync'
+import { disableAutopilot, enableAutopilot, readiness, setDryRun, status as autopilotStatus, tick } from '../../../packages/outreach/autopilot'
 import { CATEGORIES } from '../../../packages/outreach/classify'
 import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 
@@ -103,10 +104,30 @@ export function outreachRoutes(app: FastifyInstance, ctx: { db: DB; gmail: Gmail
     confirmed(req.body)
     return resumeOutreach(db)
   })
+  // ---------- Autopilot ----------
+  app.get('/api/outreach/autopilot', async () => ({ ...autopilotStatus(db), readiness: await readiness(db, gmail) }))
+  app.post('/api/outreach/autopilot', async (req) => {
+    const b = body(req)
+    if (b.enable === true) return enableAutopilot(db, gmail, b.phrase)
+    if (b.enable === false) return disableAutopilot(db)
+    throw invalid('enable must be true or false')
+  })
+  app.post('/api/outreach/autopilot/mode', async (req) => {
+    const b = body(req)
+    if (typeof b.dryRun !== 'boolean') throw invalid('dryRun must be true or false')
+    if (!b.dryRun) confirmed(b)
+    return setDryRun(db, b.dryRun)
+  })
+  // Plans one run against your real data without sending anything or touching Gmail.
+  app.post('/api/outreach/autopilot/dry-run', async () => tick(db, gmail, { dataDir, ai: ctx.aiDeps, forceDryRun: true, holder: 'dashboard-dry-run' }))
+
   app.post('/api/outreach/live-sending', async (req) => {
     const b = body(req)
     if (b.enable === true) return { liveSendingEnabled: setLiveSending(db, true, b.phrase) }
-    if (b.enable === false) return { liveSendingEnabled: setLiveSending(db, false) }
+    if (b.enable === false) {
+      if (getSetting<boolean>(db, 'outreach.autopilotEnabled')) disableAutopilot(db, 'Live sending was switched off')
+      return { liveSendingEnabled: setLiveSending(db, false) }
+    }
     throw invalid('enable must be true or false')
   })
 }
