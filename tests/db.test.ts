@@ -28,7 +28,7 @@ describe('database foundation', () => {
     expect(blob.toLowerCase()).not.toContain('caerter')
   })
 
-  it('seeds eight sponsorship and eight UGC categories and four sending tiers', () => {
+  it('seeds eight sponsorship and eight UGC categories and five sending tiers', () => {
     const db = freshDb()
     expect(all(db, "SELECT * FROM categories WHERE campaign_type = 'sponsorship'")).toHaveLength(8)
     expect(all(db, "SELECT * FROM categories WHERE campaign_type = 'ugc'")).toHaveLength(8)
@@ -38,6 +38,7 @@ describe('database foundation', () => {
         { slug: 'initial_launch', daily_limit: 15, weekly_limit: 75 },
         { slug: 'expansion', daily_limit: 25, weekly_limit: 125 },
         { slug: 'established', daily_limit: 40, weekly_limit: 200 },
+        { slug: 'dual_campaign', daily_limit: 10, weekly_limit: 50 },
       ])
   })
 

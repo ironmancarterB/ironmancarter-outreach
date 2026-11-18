@@ -10,11 +10,16 @@ const ENDPOINT = 'https://query.wikidata.org/sparql'
 const USER_AGENT = 'OutreachResearchTool/1.0 (local research; low volume)'
 
 // What each UGC category looks for: Wikidata classes (instance of, including subclasses) or industries.
-export const DISCOVERY_SOURCES: { category: string; label: string; where: string }[] = [
-  { category: 'ugc-ai-tools', label: 'AI companies', where: '?item wdt:P452 wd:Q11660 .' },
-  { category: 'ugc-saas', label: 'Software companies', where: '{ ?item wdt:P31/wdt:P279* wd:Q1058914 } UNION { ?item wdt:P452 wd:Q880371 }' },
-  { category: 'ugc-gaming', label: 'Game developers and publishers', where: '{ ?item wdt:P31/wdt:P279* wd:Q210167 } UNION { ?item wdt:P31/wdt:P279* wd:Q1137109 }' },
-  { category: 'ugc-agencies', label: 'Advertising and marketing agencies', where: '{ ?item wdt:P31/wdt:P279* wd:Q216931 } UNION { ?item wdt:P452 wd:Q37038 }' },
+export const DISCOVERY_SOURCES: { campaign: 'ugc' | 'sponsorship'; category: string; label: string; where: string }[] = [
+  { campaign: 'ugc', category: 'ugc-ai-tools', label: 'AI companies', where: '?item wdt:P452 wd:Q11660 .' },
+  { campaign: 'ugc', category: 'ugc-saas', label: 'Software companies', where: '{ ?item wdt:P31/wdt:P279* wd:Q1058914 } UNION { ?item wdt:P452 wd:Q880371 }' },
+  { campaign: 'ugc', category: 'ugc-gaming', label: 'Game developers and publishers', where: '{ ?item wdt:P31/wdt:P279* wd:Q210167 } UNION { ?item wdt:P31/wdt:P279* wd:Q1137109 }' },
+  { campaign: 'ugc', category: 'ugc-agencies', label: 'Advertising and marketing agencies', where: '{ ?item wdt:P31/wdt:P279* wd:Q216931 } UNION { ?item wdt:P452 wd:Q37038 }' },
+  // Sponsorship: brands that make gaming and tech products or services (the starter list is used up).
+  { campaign: 'sponsorship', category: 'pc-hardware', label: 'Computer hardware and consumer electronics', where: '{ ?item wdt:P452 wd:Q132898730 } UNION { ?item wdt:P452 wd:Q3966 } UNION { ?item wdt:P452 wd:Q581105 }' },
+  { campaign: 'sponsorship', category: 'gaming-peripherals', label: 'Video game accessory makers', where: '?item wdt:P1056/wdt:P279* wd:Q7927908 .' },
+  { campaign: 'sponsorship', category: 'energy-drinks', label: 'Energy drink brands', where: '{ ?item wdt:P1056/wdt:P279* wd:Q215754 } UNION { ?item wdt:P31/wdt:P279* wd:Q215754 }' },
+  { campaign: 'sponsorship', category: 'vpn-privacy', label: 'VPN providers', where: '?item wdt:P31/wdt:P279* wd:Q56240391 .' },
 ]
 
 // Sites that are not a company's own (social profiles, app stores, link hubs) are never used as its website.
@@ -41,13 +46,14 @@ export async function queryWikidata(where: string, limit: number, offset: number
 
 // Adds up to `wanted` new candidates, spread across the categories, continuing where the last run stopped.
 // Returns how many were added per category. Already-known domains (pool or CRM, either campaign) are skipped.
-export async function discoverCompanies(db: DB, wanted: number, fetchImpl: typeof fetch = fetch) {
+export async function discoverCompanies(db: DB, wanted: number, fetchImpl: typeof fetch = fetch, campaign: 'ugc' | 'sponsorship' = 'ugc') {
   const state = getSetting<{ enabled: boolean; cursors: Record<string, number>; lastRunDay: string | null }>(db, 'ugc.discovery')
   const added: Record<string, number> = {}
   const errors: string[] = []
   if (!state.enabled || wanted <= 0) return { added, errors, total: 0 }
-  const perSource = Math.max(10, Math.ceil(wanted / DISCOVERY_SOURCES.length))
-  for (const src of DISCOVERY_SOURCES) {
+  const sources = DISCOVERY_SOURCES.filter((x) => x.campaign === campaign)
+  const perSource = Math.max(10, Math.ceil(wanted / sources.length))
+  for (const src of sources) {
     const cat = get<{ id: number; enabled: number }>(db, 'SELECT id, enabled FROM categories WHERE slug = ?', src.category)
     if (!cat?.enabled) continue
     let offset = state.cursors[src.category] ?? 0
@@ -77,7 +83,7 @@ export async function discoverCompanies(db: DB, wanted: number, fetchImpl: typeo
   }
   setSetting(db, 'ugc.discovery', { ...state, lastRunDay: nowIso().slice(0, 10) })
   const total = Object.values(added).reduce((a, b) => a + b, 0)
-  logActivity(db, 'ugc.discovered', `Found ${total} new UGC candidate compan${total === 1 ? 'y' : 'ies'} on Wikidata (${Object.entries(added).map(([k, v]) => `${k.replace('ugc-', '')}: ${v}`).join(', ')})${errors.length ? `; ${errors.join('; ')}` : ''}. Each will be researched before use.`)
+  logActivity(db, campaign === 'ugc' ? 'ugc.discovered' : 'research.discovered', `Found ${total} new ${campaign === 'ugc' ? 'UGC' : 'sponsorship'} candidate compan${total === 1 ? 'y' : 'ies'} on Wikidata (${Object.entries(added).map(([k, v]) => `${k.replace('ugc-', '')}: ${v}`).join(', ')})${errors.length ? `; ${errors.join('; ')}` : ''}. Each will be researched before use.`)
   return { added, errors, total }
 }
 
@@ -86,3 +92,6 @@ export const availableUgcCandidates = (db: DB) => get<{ n: number }>(db, `SELECT
 
 export const discoveredSummary = (db: DB) => all<{ origin: string; n: number }>(db, `SELECT cp.origin, count(*) AS n FROM candidate_pool cp JOIN categories c ON c.id = cp.category_id
   WHERE c.campaign_type = 'ugc' GROUP BY cp.origin`)
+
+export const availableCandidates = (db: DB, campaign: 'ugc' | 'sponsorship') => get<{ n: number }>(db, `SELECT count(*) AS n FROM candidate_pool cp JOIN categories c ON c.id = cp.category_id
+  WHERE c.campaign_type = ? AND c.enabled = 1 AND cp.status = 'available' AND NOT EXISTS (SELECT 1 FROM prospects p WHERE p.domain = cp.domain)`, campaign)!.n

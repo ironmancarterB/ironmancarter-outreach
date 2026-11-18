@@ -256,7 +256,7 @@ describe('manual sending', () => {
     expect((await sendPitch(a.pitch.id)).statusCode).toBe(200)
     await app.close()
     await boot()
-    expect(failing(await prepare({ pitchId: b.pitch.id }))).toEqual(['Daily limit for new emails'])
+    expect(failing(await prepare({ pitchId: b.pitch.id }))).toEqual(['Daily limit for new emails', "Sponsorship share of today's new emails"])
     expect(google.sentRequests()).toHaveLength(1)
   })
 

@@ -4,6 +4,7 @@ import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Notice, PageHeade
 import { api, useApi } from '../lib/api'
 import { dateTime } from '../lib/format'
 import AutopilotPanel from './AutopilotPanel'
+import CampaignsCard from './CampaignsCard'
 
 interface Controls {
   liveSendingEnabled: boolean
@@ -54,6 +55,7 @@ export default function Autopilot() {
           )}
         </Card>
 
+        <CampaignsCard />
         <AutopilotPanel />
 
         <Card title="Live sending" actions={data.liveSendingEnabled ? <Badge tone="amber">ON (manual)</Badge> : <Badge tone="gray">OFF</Badge>}>

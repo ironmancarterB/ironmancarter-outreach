@@ -122,6 +122,48 @@ export function limitsStatus(db: DB, now = new Date()) {
   }
 }
 
+// ---------- Campaign budget ----------
+
+export type CampaignName = 'sponsorship' | 'ugc'
+export interface Allocation { sponsorship: number; ugc: number; redistributeUnused: boolean }
+
+// New first emails today per campaign (manual and automatic), against each campaign's reserved slots. The global
+// limits (sending tier and daily limits) cap the total whatever the allocation says.
+export function campaignBudget(db: DB, now = new Date()) {
+  const limits = limitsStatus(db, now)
+  const alloc = getSetting<Allocation>(db, 'outreach.allocation')
+  const sent = (c: CampaignName) => get<{ n: number }>(db, `SELECT count(*) AS n FROM send_attempts s LEFT JOIN prospects p ON p.id = s.prospect_id
+    WHERE s.kind = 'initial' AND s.day_key = ? AND s.status IN ('sending', 'sent', 'uncertain') AND COALESCE(p.campaign_type, 'sponsorship') = ?`, limits.day, c)!.n
+  const s = { sponsorship: sent('sponsorship'), ugc: sent('ugc') }
+  const globalRoom = Math.min(limits.newEmails.remaining, limits.weekNew.remaining, limits.total.remaining)
+  const room = (c: CampaignName) => {
+    const other: CampaignName = c === 'ugc' ? 'sponsorship' : 'ugc'
+    const own = Math.max(0, alloc[c] - s[c])
+    const spare = alloc.redistributeUnused ? Math.max(0, alloc[other] - s[other]) : 0
+    return Math.max(0, Math.min(own + spare, globalRoom))
+  }
+  return {
+    day: limits.day, tier: limits.tier, limits, allocation: alloc,
+    campaigns: {
+      sponsorship: { allocated: alloc.sponsorship, sent: s.sponsorship, remaining: room('sponsorship') },
+      ugc: { allocated: alloc.ugc, sent: s.ugc, remaining: room('ugc') },
+    },
+    combined: { sent: limits.newEmails.sent, limit: limits.newEmails.limit },
+    week: limits.weekNew,
+  }
+}
+
+// Changing the sending tier is your decision; this records it with your reason.
+export function setSendingTier(db: DB, slug: unknown, note: unknown) {
+  const tier = get<{ slug: string; name: string; daily_limit: number; weekly_limit: number }>(db, 'SELECT slug, name, daily_limit, weekly_limit FROM sending_tiers WHERE slug = ?', String(slug ?? ''))
+  if (!tier) throw new AppError(400, 'invalid', 'Unknown sending tier')
+  const why = String(note ?? '').trim()
+  if (why.length < 10) throw new AppError(400, 'invalid', 'Say why the tier is changing (your approval is recorded).')
+  setSetting(db, 'outreach.sendingTier', tier.slug)
+  logActivity(db, 'outreach.tier_changed', `Sending tier set to ${tier.name} (${tier.daily_limit} new emails a day, ${tier.weekly_limit} a week): ${why}`)
+  return tier
+}
+
 // ---------- Checks ----------
 
 interface Evaluation {
@@ -183,6 +225,9 @@ async function evaluate(db: DB, deps: GmailDeps, target: SendTarget, now = new D
     subject = p.subject ?? ''
     add(checks, 'Daily limit for new emails', limits.newEmails.remaining > 0 && limits.weekNew.remaining > 0,
       `${limits.newEmails.sent} of ${limits.newEmails.limit} today; ${limits.weekNew.sent} of ${limits.weekNew.limit} this week (${limits.tier} tier)`)
+    const campaign: CampaignName = prospect.campaign_type === 'ugc' ? 'ugc' : 'sponsorship'
+    const b = campaignBudget(db, now).campaigns[campaign]
+    add(checks, `${campaign === 'ugc' ? 'UGC' : 'Sponsorship'} share of today's new emails`, b.remaining > 0, `${b.sent} of ${b.allocated} used today`)
   } else {
     reconcileFollowUps(db)
     const f = getFollowUp(db, target.followUpId)

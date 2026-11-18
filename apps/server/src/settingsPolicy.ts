@@ -59,6 +59,7 @@ export const LOCKED: Record<string, string> = {
   'ugc.launchGate': 'Written by the UGC launch gate check.',
   'ugc.videosPermission': 'Confirm video permission in UGC Clients → Autopilot.',
   'ugc.discovery': 'Managed by the daily UGC run.',
+  'outreach.campaignPause': 'Use the pause switches in Outreach Controls.',
 }
 
 export const VALIDATORS: Record<string, Validator> = {
@@ -116,6 +117,12 @@ export const VALIDATORS: Record<string, Validator> = {
     const followUpsPerDay = num(0, 25)(o.followUpsPerDay) as number
     const totalPerDay = num(0, 75)(o.totalPerDay) as number
     return { newPerDay: Math.round(newPerDay), followUpsPerDay: Math.round(followUpsPerDay), totalPerDay: Math.round(totalPerDay) }
+  },
+  // How the shared daily budget for new emails is split. The sending tier still caps the total.
+  'outreach.allocation': (v) => {
+    const o = obj(v)
+    if (typeof o.redistributeUnused !== 'boolean') throw invalid('redistributeUnused must be true or false')
+    return { sponsorship: Math.round(num(0, 20)(o.sponsorship) as number), ugc: Math.round(num(0, 20)(o.ugc) as number), redistributeUnused: o.redistributeUnused }
   },
   // UGC research volume. Prospecting targets never change sending limits.
   'ugc.research': (v) => {

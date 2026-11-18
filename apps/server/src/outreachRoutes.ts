@@ -12,11 +12,11 @@ import {
   approveFollowUp, cancelFollowUp, createFollowUpDraft, editFollowUp, listFollowUps, reconcileFollowUps, rescheduleFollowUp, skipFollowUp, updateFollowUpDraft,
 } from '../../../packages/outreach/followups'
 import {
-  ACTIVATION_PHRASE, activationChecklist, confirmSend, pendingFollowUp, emergencyStop, limitsStatus, prepareSend, reconcileSend, resolveSend, resumeOutreach, setLiveSending, stopState,
+  ACTIVATION_PHRASE, activationChecklist, setSendingTier, confirmSend, pendingFollowUp, emergencyStop, limitsStatus, prepareSend, reconcileSend, resolveSend, resumeOutreach, setLiveSending, stopState,
   type SendTarget,
 } from '../../../packages/outreach/send'
 import { checkThreadBeforeFollowUp, syncConversations } from '../../../packages/outreach/sync'
-import { disableAutopilot, disableUgcAutopilot, enableAutopilot, readiness, setDryRun, status as autopilotStatus, tick } from '../../../packages/outreach/autopilot'
+import { disableAutopilot, disableUgcAutopilot, dualStatus, enableAutopilot, setCampaignPaused, readiness, setDryRun, status as autopilotStatus, tick } from '../../../packages/outreach/autopilot'
 import { CATEGORIES } from '../../../packages/outreach/classify'
 import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 
@@ -86,6 +86,20 @@ export function outreachRoutes(app: FastifyInstance, ctx: { db: DB; gmail: Gmail
   app.post('/api/outreach/sends/:id/resolve', async (req) => {
     confirmed(req.body)
     return resolveSend(db, gmail, id(params(req).id), body(req).outcome)
+  })
+
+  // ---------- Both campaigns: shared budget, pause switches, sending tier ----------
+  app.get('/api/outreach/campaigns', async () => dualStatus(db))
+  app.post('/api/outreach/campaigns/:campaign/pause', async (req) => {
+    const c = params(req).campaign
+    if (c !== 'sponsorship' && c !== 'ugc') throw invalid('Unknown campaign')
+    setCampaignPaused(db, c, body(req).paused !== false)
+    return dualStatus(db)
+  })
+  app.post('/api/outreach/tier', async (req) => {
+    confirmed(req.body)
+    setSendingTier(db, body(req).tier, body(req).note)
+    return dualStatus(db)
   })
 
   // Puts the current signature on every unsent draft (and its Gmail copy). Never sends.

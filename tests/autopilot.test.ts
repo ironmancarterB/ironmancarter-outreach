@@ -128,7 +128,7 @@ describe('automatic sending', () => {
     for (let i = 0; i < 7; i++) await run1()
     expect(sends()).toHaveLength(5)
     expect(sends().every((s) => s.status === 'sent' && s.initiated_by === 'autopilot' && s.kind === 'initial')).toBe(true)
-    expect((await run1()).note).toMatch(/Daily limit reached/)
+    expect((await run1()).note).toMatch(/daily limit reached/i)
     const msg = parseMessage(google.sentMessages()[0].raw)
     expect(msg.parts.find((x) => x.contentType === 'application/pdf')?.filename).toBe('Media Kit.pdf')
     const text = msg.parts.find((x) => x.contentType === 'text/plain')!.data.toString('utf8').replace(/\r\n/g, '\n')
@@ -260,14 +260,15 @@ describe('safety brakes', () => {
     expect(google.sentRequests()).toHaveLength(1)
   })
 
-  it('pauses after repeated errors', async () => {
+  it('stops for the rest of the day after repeated errors, without switching off', async () => {
     await connectAndGoLive()
     await enable()
     await lead(1)
     for (let i = 0; i < 3; i++) run(db, "INSERT INTO autopilot_events (day_key, kind, detail, created_at) VALUES (?, 'error', 'x', ?)", new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), new Date().toISOString())
-    await run1()
+    expect((await run1()).note).toBe('Stopped for today: errors.')
+    expect((await run1()).note).toMatch(/^Waiting until/)
     expect(sends()).toEqual([])
-    expect(getSetting(db, 'outreach.autopilotEnabled')).toBe(false)
+    expect(getSetting(db, 'outreach.autopilotEnabled')).toBe(true)
   })
 
   it('pauses when Gmail sending permissions are missing', async () => {

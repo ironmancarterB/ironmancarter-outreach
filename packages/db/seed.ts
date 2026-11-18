@@ -34,6 +34,11 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   // Autopilot (automatic sending). Switched on only through Outreach Controls; new first emails are hard-capped at 5 a day.
   'outreach.autopilot': { dryRun: true, newPerDay: 5, sendGapMinutes: 20, syncEveryMinutes: 15, maxErrorsPerDay: 3, maxBouncesPerWeek: 2 },
   'outreach.autopilotPause': { reason: null, at: null },
+  // The shared daily budget for new emails, split per campaign. A campaign never uses the other's slots unless
+  // redistributeUnused is on, and the sending tier and daily limits always cap the total.
+  'outreach.allocation': { sponsorship: 5, ugc: 5, redistributeUnused: false },
+  // Independent pause switches. Pausing keeps a campaign's autopilot on but sends nothing until resumed.
+  'outreach.campaignPause': { sponsorship: false, ugc: false },
   // STOP ALL OUTREACH. While active, no send can start.
   'outreach.emergencyStop': { active: false, at: null, reason: null },
 
@@ -79,6 +84,8 @@ export const SENDING_TIERS = [
   { slug: 'initial_launch', name: 'Initial Launch', daily: 15, weekly: 75 },
   { slug: 'expansion', name: 'Expansion', daily: 25, weekly: 125 },
   { slug: 'established', name: 'Established', daily: 40, weekly: 200 },
+  // Both campaigns on autopilot: 10 new emails a day (5 sponsorship + 5 UGC), 50 a week.
+  { slug: 'dual_campaign', name: 'Dual campaign', daily: 10, weekly: 50 },
 ]
 
 const PACKAGE_NOTE = 'Exploratory range, not a guaranteed market rate. Usage rights, paid ads, whitelisting and exclusivity are never included unless quoted separately.'
