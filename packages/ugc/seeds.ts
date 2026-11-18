@@ -4,14 +4,14 @@
 // pool or CRM is skipped, so a company is only ever in one campaign.
 
 export const UGC_CATEGORIES = [
-  { slug: 'ugc-ai-tools', name: 'UGC · AI tools', description: 'AI assistants, AI video, voice, writing and image tools that need product demos.' },
-  { slug: 'ugc-saas', name: 'UGC · SaaS products', description: 'Business and creator SaaS where a walkthrough video shows the product better than a landing page.' },
-  { slug: 'ugc-consumer-apps', name: 'UGC · Consumer apps', description: 'Mobile and desktop consumer apps that buy app-install and social ads.' },
-  { slug: 'ugc-gaming', name: 'UGC · Gaming companies', description: 'Game studios, publishers, game stores and gaming services that run creator-style ads.' },
-  { slug: 'ugc-creator-tools', name: 'UGC · Creator tools', description: 'Video, audio, scheduling and monetization tools for creators.' },
-  { slug: 'ugc-tech-products', name: 'UGC · Technology products', description: 'Consumer tech, accessories and gadgets that suit unboxing and first-use videos.' },
-  { slug: 'ugc-productivity', name: 'UGC · Productivity software', description: 'Task, notes, calendar, email and focus software.' },
-  { slug: 'ugc-agencies', name: 'UGC · Marketing and creative agencies', description: 'Influencer, UGC, growth and creative agencies that hire creators for client work.' },
+  { slug: 'ugc-ai-tools', priority: 1, name: 'UGC · AI tools', description: 'AI assistants, AI video, voice, writing and image tools that need product demos.' },
+  { slug: 'ugc-saas', priority: 1, name: 'UGC · SaaS products', description: 'Business and creator SaaS where a walkthrough video shows the product better than a landing page.' },
+  { slug: 'ugc-consumer-apps', priority: 2, name: 'UGC · Consumer apps', description: 'Mobile and desktop consumer apps that buy app-install and social ads.' },
+  { slug: 'ugc-gaming', priority: 2, name: 'UGC · Gaming companies', description: 'Game studios, publishers, game stores and gaming services that run creator-style ads.' },
+  { slug: 'ugc-creator-tools', priority: 2, name: 'UGC · Creator tools', description: 'Video, audio, scheduling and monetization tools for creators.' },
+  { slug: 'ugc-tech-products', priority: 3, name: 'UGC · Technology products', description: 'Consumer tech, accessories and gadgets that suit unboxing and first-use videos.' },
+  { slug: 'ugc-productivity', priority: 3, name: 'UGC · Productivity software', description: 'Task, notes, calendar, email and focus software.' },
+  { slug: 'ugc-agencies', priority: 4, name: 'UGC · Marketing and creative agencies', description: 'Influencer, UGC, growth and creative agencies that hire creators for client work.' },
 ]
 
 export const UGC_SEEDS: Record<string, [name: string, website: string][]> = {

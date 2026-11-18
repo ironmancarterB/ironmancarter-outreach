@@ -163,8 +163,8 @@ export function seed(db: DB) {
     const hasUgc = !!get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'email_templates'")
     if (hasUgc) {
       UGC_CATEGORIES.forEach((c, i) => {
-        run(db, `INSERT OR IGNORE INTO categories (slug, name, description, sort_order, campaign_type) VALUES (?, ?, ?, ?, 'ugc')`,
-          c.slug, c.name, c.description, 100 + i)
+        run(db, `INSERT OR IGNORE INTO categories (slug, name, description, priority, sort_order, campaign_type) VALUES (?, ?, ?, ?, ?, 'ugc')`,
+          c.slug, c.name, c.description, c.priority, 100 + i)
       })
       for (const t of DEFAULT_TEMPLATES) {
         run(db, `INSERT OR IGNORE INTO email_templates (slug, campaign_type, kind, name, subject, body, default_subject, default_body, sort_order, updated_at)

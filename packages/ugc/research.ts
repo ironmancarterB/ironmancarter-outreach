@@ -4,7 +4,7 @@
 import type { FitBreakdown } from '../core/scoring'
 import { scoreFit } from '../core/scoring'
 import { normalizeDomain } from '../core/normalize'
-import type { ExtractedPage } from '../research/extract'
+import { decodeEntities, type ExtractedPage } from '../research/extract'
 import type { Finding, Signal } from '../research/evidence'
 
 export type UgcSignal =
@@ -73,16 +73,19 @@ export function detectUgcSignals(pages: { url: string; page: ExtractedPage }[], 
   return [...found.values()]
 }
 
-const CATEGORY: Record<string, { relevance: number; fit: number; recurring: number; label: string }> = {
-  'ugc-ai-tools': { relevance: 22, fit: 14, recurring: 12, label: 'AI tool (demos show the product best)' },
-  'ugc-saas': { relevance: 18, fit: 12, recurring: 12, label: 'SaaS product (walkthrough videos)' },
-  'ugc-consumer-apps': { relevance: 18, fit: 11, recurring: 12, label: 'Consumer app (app-install and social ads)' },
-  'ugc-gaming': { relevance: 23, fit: 15, recurring: 12, label: 'Gaming company (your core niche)' },
-  'ugc-creator-tools': { relevance: 22, fit: 14, recurring: 12, label: 'Creator tool (you use this kind of tool)' },
-  'ugc-tech-products': { relevance: 19, fit: 13, recurring: 8, label: 'Tech product (unboxing and first-use videos)' },
-  'ugc-productivity': { relevance: 18, fit: 12, recurring: 11, label: 'Productivity software (workflow videos)' },
-  'ugc-agencies': { relevance: 20, fit: 13, recurring: 14, label: 'Agency (hires creators for client work)' },
+// Product relevance follows your category priority (AI tools first … agencies last); recurring and fit reflect the
+// kind of work each category buys.
+export const UGC_CATEGORY_BASE: Record<string, { relevance: number; fit: number; recurring: number; label: string; priority: number }> = {
+  'ugc-ai-tools': { relevance: 24, fit: 14, recurring: 12, label: 'AI tool (demos show the product best)', priority: 1 },
+  'ugc-saas': { relevance: 22, fit: 12, recurring: 12, label: 'SaaS product (walkthrough videos)', priority: 1 },
+  'ugc-consumer-apps': { relevance: 21, fit: 11, recurring: 12, label: 'Consumer app (app-install and social ads)', priority: 2 },
+  'ugc-gaming': { relevance: 21, fit: 15, recurring: 12, label: 'Gaming company (your core niche)', priority: 2 },
+  'ugc-creator-tools': { relevance: 20, fit: 14, recurring: 12, label: 'Creator tool (you use this kind of tool)', priority: 2 },
+  'ugc-tech-products': { relevance: 18, fit: 13, recurring: 8, label: 'Tech product (unboxing and first-use videos)', priority: 3 },
+  'ugc-productivity': { relevance: 17, fit: 12, recurring: 11, label: 'Productivity software (workflow videos)', priority: 3 },
+  'ugc-agencies': { relevance: 14, fit: 11, recurring: 10, label: 'Agency (hires creators for client work)', priority: 4 },
 }
+const CATEGORY = UGC_CATEGORY_BASE
 
 export const UGC_FIT_LABELS: Record<string, string> = {
   audience: 'Product relevance',
@@ -146,8 +149,8 @@ export interface Concept { title: string; outline: string; basis: string }
 
 // A short, clean product description from the site's own words (meta description, else the title).
 export function productLine(name: string, page: Pick<ExtractedPage, 'title' | 'description'>): string | null {
-  const raw = (page.description || '').replace(/\s+/g, ' ').trim()
-  const fromTitle = (page.title || '').split(/\s[|–—-]\s/).map((x) => x.trim()).find((x) => x && x.toLowerCase() !== name.toLowerCase())
+  const raw = decodeEntities(page.description || '').replace(/\s+/g, ' ').trim()
+  const fromTitle = decodeEntities(page.title || '').split(/\s[|–—-]\s/).map((x) => x.trim()).find((x) => x && x.toLowerCase() !== name.toLowerCase())
   const text = raw.length >= 25 ? raw : fromTitle && fromTitle.length >= 12 ? fromTitle : null
   if (!text) return null
   const first = text.split(/(?<=[.!?])\s+/)[0]

@@ -258,7 +258,7 @@ describe('UGC pitches', () => {
     expect(pitch.body).toContain('Hi Flowly 1 team,')
     expect(pitch.body).toContain('- Problem to solution demo:')
     expect(pitch.body).toContain(PORTFOLIO)
-    expect(pitch.body).toContain('Your site describes Flowly 1 as "Flowly turns meeting notes into tasks automatically"')
+    expect(pitch.body).toContain('From your site: "Flowly turns meeting notes into tasks automatically."')
     expect(pitch.body).toMatch(/You're already on TikTok/)
     expect(pitch.body).toMatch(/Best,\nCarter$/)
     expect(pitch.body).not.toMatch(/followers|views|subscribers|media kit/i)

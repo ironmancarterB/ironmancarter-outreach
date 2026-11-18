@@ -29,7 +29,6 @@ const research = (s: UgcFacts['signals'][number]): ClaimSource => ({ type: 'rese
 const has = (u: UgcFacts, label: string) => u.signals.find((s) => s.label.includes(label))
 
 export function brandLine(f: Facts, u: UgcFacts): Claim | null {
-  const name = f.prospect.name
   const sources: ClaimSource[] = []
   const parts: string[] = []
   const site = u.site
@@ -40,7 +39,7 @@ export function brandLine(f: Facts, u: UgcFacts): Claim | null {
       sources.push(research(agency))
     }
   } else if (f.prospect.products && site) {
-    parts.push(`Your site describes ${name} as "${f.prospect.products.replace(/[.…]+$/, '')}", and that is the kind of product people get faster when they see it in action.`)
+    parts.push(`From your site: "${f.prospect.products.replace(/[.…]+$/, '')}." That's the kind of product people understand faster when they see it in action.`)
     sources.push({ type: 'research', id: site.id, url: site.url, label: 'Official website', snippet: site.snippet, retrieved_at: site.retrieved_at })
   }
   const tiktok = has(u, 'On TikTok')
