@@ -10,6 +10,9 @@ import { SIGNAL_LABELS } from '../research/evidence'
 import { isTemplateConcept } from '../research/score'
 import { getDefaultMediaKit, type MediaKit } from '../mediakit/store'
 import { classifyProgram, PROGRAM_LABELS, type ProgramType } from './programType'
+import { portfolioStatus } from '../ugc/portfolio'
+import type { UgcFacts } from '../ugc/pitch'
+import type { Concept } from '../ugc/research'
 
 export interface PitchOptions {
   channel: 'email' | 'manual_form'
@@ -79,6 +82,8 @@ export interface Facts {
   options: PitchOptions
   business: { name: string; email: string; signature: string }
   flags: Flag[]
+  campaignType: 'sponsorship' | 'ugc'
+  ugc: UgcFacts | null
 }
 
 const SIGNAL_BY_LABEL = Object.fromEntries(Object.entries(SIGNAL_LABELS).map(([k, v]) => [v, k]))
@@ -106,8 +111,10 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
 
   const auto = classifyProgram(evidence)
   const programType = p.program_type_override ?? auto.type
-  if (!evidence.length) flag('missing', 'no_evidence', 'No verified evidence of creator partnerships. The pitch can only speak to category fit; consider adding a source or skipping this brand.')
-  if (programType === 'affiliate_only') flag('warning', 'affiliate_only', 'Only an affiliate (commission) program was found. The pitch asks about a paid sponsorship instead of joining it.')
+  const isUgc = p.campaign_type === 'ugc'
+  // UGC pitches do not depend on sponsorship evidence, audience figures or the sponsorship media kit.
+  if (!isUgc && !evidence.length) flag('missing', 'no_evidence', 'No verified evidence of creator partnerships. The pitch can only speak to category fit; consider adding a source or skipping this brand.')
+  if (!isUgc && programType === 'affiliate_only') flag('warning', 'affiliate_only', 'Only an affiliate (commission) program was found. The pitch asks about a paid sponsorship instead of joining it.')
   if (!website) flag('missing', 'no_research', 'No research record of the official website. Run research or add a source before relying on brand details.')
   if (!p.products) flag('warning', 'no_products', 'No product description on record, so the pitch does not describe their products.')
   const freshness = getSetting<number>(db, 'outreach.researchFreshnessDays')
@@ -141,12 +148,13 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
   const metric = (platform: string, key: string) => get<MetricFact>(db,
     'SELECT id, platform, metric_key, label, value, unit, period_label, period_start, period_end, as_of, source FROM creator_metrics WHERE platform = ? AND metric_key = ? AND pitchable = 1', platform, key) ?? null
   const metrics = { igViews: metric('instagram', 'views_90d'), ytViews: metric('youtube', 'views_90d'), igAge: metric('instagram', 'audience_18_34') }
-  if (!metrics.igViews && !metrics.ytViews) flag('missing', 'no_metrics', 'No pitchable 90-day view figures. Mark them "may be quoted" in Settings → Creator analytics.')
+  if (!isUgc && !metrics.igViews && !metrics.ytViews) flag('missing', 'no_metrics', 'No pitchable 90-day view figures. Mark them "may be quoted" in Settings → Creator analytics.')
   const oldest = [metrics.igViews, metrics.ytViews].filter(Boolean).map((m) => daysSince(m!.as_of, now)).sort((a, b) => b - a)[0]
-  if (oldest > 60) flag('warning', 'metrics_stale', `Your analytics are ${Math.round(oldest)} days old. Update them in Settings → Creator analytics.`)
+  if (!isUgc && oldest > 60) flag('warning', 'metrics_stale', `Your analytics are ${Math.round(oldest)} days old. Update them in Settings → Creator analytics.`)
 
-  const mediaKit = getDefaultMediaKit(db) ?? null
-  if (!mediaKit) flag('missing', 'no_media_kit', 'No default media kit. Import one on the Media Kit page.')
+  // UGC pitches attach your UGC rate card / portfolio PDF when you have one; never the sponsorship media kit.
+  const mediaKit = (isUgc ? getDefaultMediaKit(db, 'ugc') : getDefaultMediaKit(db)) ?? null
+  if (!isUgc && !mediaKit) flag('missing', 'no_media_kit', 'No default media kit. Import one on the Media Kit page.')
   if (options.channel === 'manual_form' && mediaKit && !mediaKit.public_url) {
     flag('warning', 'no_public_kit', 'Forms usually cannot take attachments and your media kit has no public link, so the message offers to send it.')
   }
@@ -157,8 +165,25 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
 
   const concept = options.concept?.trim() || (p.campaign_concept ? stripAiSuffix(p.campaign_concept) : null)
   if (!concept) flag('missing', 'no_concept', 'No campaign concept. Add one in the pitch options.')
-  else if (category && isTemplateConcept(concept)) flag('warning', 'concept_template', `The campaign concept is the generic ${category.name} template. Tailor it to ${p.company_name}.`)
+  else if (!isUgc && category && isTemplateConcept(concept)) flag('warning', 'concept_template', `The campaign concept is the generic ${category.name} template. Tailor it to ${p.company_name}.`)
   else if (!options.concept && p.campaign_concept && AI_SUFFIX.test(p.campaign_concept)) flag('warning', 'concept_ai', 'The campaign concept was drafted by local AI. Check it is accurate.')
+
+  let ugc: UgcFacts | null = null
+  if (isUgc) {
+    const researched = (() => { try { return JSON.parse(p.ugc_concepts ?? '[]') as Concept[] } catch { return [] } })()
+    const concepts = options.concept?.trim() ? [{ title: 'Video idea', outline: options.concept.trim(), basis: 'Written by you' }] : researched
+    const portfolio = portfolioStatus(db, now)
+    ugc = {
+      concepts,
+      signals: sources.filter((s) => s.kind === 'other' && s.title?.startsWith('UGC signal: '))
+        .map((s) => ({ id: s.id, label: s.title!.slice('UGC signal: '.length), url: s.url, snippet: s.snippet, retrieved_at: s.retrieved_at })),
+      portfolio: { url: portfolio.url, usable: portfolio.usable, link: portfolio.link, reason: portfolio.reason },
+      site: website ? { id: website.id, url: website.url, snippet: website.snippet, retrieved_at: website.retrieved_at } : null,
+    }
+    if (!portfolio.usable) flag('missing', 'no_portfolio', `${portfolio.reason} UGC emails always include your live portfolio link.`)
+    if (!concepts.length) flag('missing', 'no_ugc_concepts', 'No researched video concepts. Re-run research or write a concept in the pitch options.')
+    if (!mediaKit) flag('warning', 'no_ugc_kit', 'No UGC rate card or portfolio PDF on file (optional). Add one on the Media Kit page if you want it attached.')
+  }
 
   return {
     prospect: {
@@ -175,6 +200,8 @@ export function gatherFacts(db: DB, prospectId: number, options: PitchOptions, n
     options,
     business: { name: getSetting<string>(db, 'business.creatorName'), email: getSetting<string>(db, 'business.email'), signature: getSignature(db) },
     flags,
+    campaignType: isUgc ? 'ugc' : 'sponsorship',
+    ugc,
   }
 }
 

@@ -1,7 +1,7 @@
 // Puts your current signature on every UNSENT draft: pitches (email and manual), pending follow-ups, and their
 // Gmail drafts (updated in place, same draft id, never sent). Sent emails and conversation history are not
 // touched. A draft you changed in Gmail is left alone and reported, so your Gmail edits are never overwritten.
-import { all, logActivity, nowIso, run, type DB } from '../db'
+import { all, get, logActivity, nowIso, run, type DB } from '../db'
 import type { GmailDeps } from '../gmail/account'
 import { activeAccount } from '../gmail/account'
 import { composeBody, contentHash, updatePitchDraft, type DraftRow } from '../gmail/drafts'
@@ -52,7 +52,9 @@ export async function refreshSignatures(db: DB, deps: GmailDeps | null, dataDir:
     if (d.edited_in_gmail) { result.skipped.push(`${label}: you changed it in Gmail, so it was left as is.`); continue }
     try {
       if (d.kind === 'pitch' && d.pitch_id) {
-        if (d.pitch_status !== 'approved') { result.skipped.push(`${label}: its pitch is not approved, so Gmail was not updated.`); continue }
+        // UGC drafts are in Gmail for review before approval, so they are refreshed too.
+        const ugcReview = d.pitch_status === 'draft' && get<{ campaign_type: string }>(db, 'SELECT campaign_type FROM prospects WHERE id = ?', d.prospect_id ?? 0)?.campaign_type === 'ugc'
+        if (d.pitch_status !== 'approved' && !ugcReview) { result.skipped.push(`${label}: its pitch is not approved, so Gmail was not updated.`); continue }
         await updatePitchDraft(db, deps!, dataDir, d.pitch_id)
         result.gmailDraftsUpdated++
       } else if (d.kind === 'follow_up' && d.follow_up_id) {

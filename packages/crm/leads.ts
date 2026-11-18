@@ -41,6 +41,8 @@ export function qualifyContact(i: QualifyInput): Qualification {
     const cls = classifyEmail(email, emailDomain(email) ?? '')
     if (cls.kind === 'placeholder') fail('unverified', 'Example or placeholder address.')
     if (cls.kind === 'free_mail') fail('unverified', 'Free email provider, so the connection to the brand cannot be established.')
+    // press@www.brand.com: the website's host, almost always a typo for press@brand.com. Never guessed or corrected.
+    if (/@www\./.test(email)) fail('invalid_domain', 'The address uses the website host (www.), which is not a mail domain. It was not corrected or guessed.')
   }
   if (!normalizeUrl(c.source_url)) fail('unverified', 'No source URL showing where this address was published.')
   if (c.verification_status !== 'verified') fail('unverified', c.verification_status === 'failed' ? 'No longer published at its source, or failed verification.' : 'Not verified against a public source.')
@@ -65,7 +67,7 @@ export function departmentOf(c: Pick<Contact, 'email' | 'contact_tier' | 'contac
   if (has(/^(influencers?|creators?|creatorpartnerships|ambassadors?|talent|streamers?)$/)) return { rank: 10, label: 'Influencer / creator partnerships' }
   if (has(/^(partnerships?|partners?|brandpartnerships?|sponsorships?|sponsors?|collabs?|collaborations?)$/)) return { rank: 20, label: 'Brand partnerships / sponsorships' }
   if (has(/^(affiliates?|affiliate|program)$/)) return { rank: 25, label: 'Affiliate program' }
-  if (has(/^(marketing|mktg|social|community|brand|brands|advertising|ads|events)$/)) return { rank: 30, label: 'Marketing / social' }
+  if (has(/^(marketing|mktg|social|community|brand|brands|advertising|ads|events|creative|growth|content|ugc|video|studio)$/)) return { rank: 30, label: 'Marketing / social' }
   if (has(/^(pr|press|media|news|newsroom)$/)) return { rank: 40, label: 'PR / media relations' }
   return { rank: 60, label: 'General business' }
 }
@@ -122,6 +124,7 @@ export interface Lead {
   domain: string | null
   category_id: number | null
   category_name: string | null
+  campaign_type: Prospect['campaign_type']
   fit_score: number | null
   review_status: Prospect['review_status']
   stage: string
@@ -203,7 +206,7 @@ export function listLeads(db: DB): Lead[] {
     const bounced = scored.some((s) => s.q.failure === 'bounced')
     const elig = best ? contactEligibility(db, best.c, p) : null
     return {
-      id: p.id, company_name: p.company_name, website: p.website, domain: p.domain, category_id: p.category_id, category_name: p.category_name, fit_score: p.fit_score,
+      id: p.id, company_name: p.company_name, website: p.website, domain: p.domain, category_id: p.category_id, category_name: p.category_name, campaign_type: p.campaign_type, fit_score: p.fit_score,
       review_status: p.review_status, stage: p.stage,
       actionable: !ex, has_qualifying_email: !!best,
       exclusion: ex ? { ...ex, label: EXCLUSION_LABELS[ex.code] } : null,

@@ -12,6 +12,7 @@ import { COMMON_PATHS, detectSignals, evidencePriority, pageSignals, rankLinks, 
 import type { Fetcher, FetchResult } from './fetcher'
 import { CONCEPT_TEMPLATES, scoreResearch } from './score'
 import { queueContactResearch } from './contacts'
+import { conceptText, detectUgcSignals, productLine, scoreUgc, ugcConcepts, UGC_SIGNAL_LABELS, type UgcSignal } from '../ugc/research'
 
 export interface Candidate {
   id: number
@@ -175,13 +176,24 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
   const emails = [...found.values()].sort((a, b) => rankOf(a.email) - rankOf(b.email) || a.rank - b.rank).filter((e) => !get(db, 'SELECT 1 FROM contacts WHERE email = ?', e.email)).slice(0, 3)
 
   // 5. Score, concept, and save.
-  const category = get<{ slug: string; name: string }>(db, 'SELECT slug, name FROM categories WHERE id = ?', cand.category_id)!
-  const scored = scoreResearch({ categorySlug: category.slug, categoryName: category.name, signals, bestEmailRank: emails.length ? Math.min(...emails.map((e) => e.rank)) : null, hasContactForm: !!formUrl })
+  const category = get<{ slug: string; name: string; campaign_type: 'sponsorship' | 'ugc' }>(db, 'SELECT slug, name, campaign_type FROM categories WHERE id = ?', cand.category_id)!
+  const ugc = category.campaign_type === 'ugc'
+  const bestEmailRank = emails.length ? Math.min(...emails.map((e) => e.rank)) : null
+  // UGC: signals of video marketing and creator use, read from the same pages (no extra requests).
+  const ugcFindings = ugc ? detectUgcSignals(pages, siteDomain, category.slug) : []
+  const ugcSignals = new Set<UgcSignal>(ugcFindings.map((f) => f.signal))
+  const scored = ugc
+    ? scoreUgc({ categorySlug: category.slug, ugc: ugcSignals, shared: signals, bestEmailRank, hasContactForm: !!formUrl })
+    : scoreResearch({ categorySlug: category.slug, categoryName: category.name, signals, bestEmailRank, hasContactForm: !!formUrl })
   const matches = titleMatches(cand.company_name, siteDomain, homePage)
   const programSignal = (['creator_program', 'affiliate_program', 'ambassador_program', 'influencer_mentions'] as Signal[]).some((s) => signals.has(s))
   const confidence = !matches ? 'low' : programSignal || emails.length ? 'high' : 'medium'
   const evidenceSignals = findings.filter((f) => !AUDIENCE_SIGNALS.includes(f.signal))
-  const concept = await campaignConcept(db, deps, { name: cand.company_name, categorySlug: category.slug, categoryName: category.name, description: homePage.description, findings: evidenceSignals })
+  const product = ugc ? productLine(cand.company_name, homePage) : null
+  const concepts = ugc ? ugcConcepts({ name: cand.company_name, categorySlug: category.slug, product, sourceUrl: home.finalUrl, ugc: ugcSignals }) : []
+  const concept = ugc
+    ? { concept: conceptText(concepts), note: null as string | null }
+    : await campaignConcept(db, deps, { name: cand.company_name, categorySlug: category.slug, categoryName: category.name, description: homePage.description, findings: evidenceSignals })
 
   const notes: string[] = []
   if (!matches) notes.push(`The homepage title ("${homePage.title ?? 'none'}") does not clearly match ${cand.company_name}; confirm this is the official site.`)
@@ -209,6 +221,7 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
       }, { allowSimilarName: false, contactEmails: emails.map((e) => e.email) })
       const now = nowIso()
       run(db, 'UPDATE prospects SET last_researched_at = ? WHERE id = ?', now, p.id)
+      if (ugc) run(db, "UPDATE prospects SET campaign_type = 'ugc', ugc_concepts = ?, products = COALESCE(?, products) WHERE id = ?", JSON.stringify(concepts), product, p.id)
       emails.forEach((e, i) => addContact(db, p.id, {
         email: e.email, role: e.label, source_url: e.sourceUrl, verification_status: 'verified', verified_at: e.fetchedAt,
         jurisdiction: 'unknown', is_primary: i === 0, discovered_by: 'research',
@@ -227,6 +240,14 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
         const kind = audience ? 'other' : f.signal === 'partnership_inquiries' ? 'partnership_page' : 'sponsorship_evidence'
         addSource(f.url, kind, audience ? `Audience signal: ${SIGNAL_LABELS[f.signal]}` : SIGNAL_LABELS[f.signal], f.snippet, at)
       }
+      // Several UGC signals can come from one page, so these are kept per signal, not per page.
+      for (const f of ugcFindings) {
+        const at = pages.find((x) => x.url === f.url)?.fetchedAt ?? home.fetchedAt
+        const title = `UGC signal: ${UGC_SIGNAL_LABELS[f.signal]}`
+        if (!get(db, 'SELECT 1 FROM research_sources WHERE prospect_id = ? AND title = ?', p.id, title)) {
+          run(db, 'INSERT INTO research_sources (prospect_id, url, title, kind, retrieved_at, snippet) VALUES (?, ?, ?, ?, ?, ?)', p.id, f.url, title, 'other', at, f.snippet)
+        }
+      }
       for (const e of emails) addSource(e.sourceUrl, 'contact', `Published address: ${e.email}`, null, e.fetchedAt)
       if (formUrl && !emails.length) addSource(formUrl.url, 'contact', 'Contact form', null, formUrl.fetchedAt)
       if (notes.length) run(db, 'INSERT INTO notes (prospect_id, body, created_at) VALUES (?, ?, ?)', p.id, `Research notes:\n• ${notes.join('\n• ')}`, now)
@@ -237,7 +258,7 @@ export async function researchCandidate(db: DB, cand: Candidate, deps: ResearchD
         { prospectId: p.id, data: { batch: cand.batch_id, signals: [...signals] } })
       return p.id
     })
-    const summary = [`score ${scored.score}`, emails.length ? `${emails.length} verified email(s)` : formUrl ? 'contact form only' : 'no contact found', `${evidenceSignals.length} evidence signal(s)`]
+    const summary = [`${ugc ? 'UGC lead score' : 'score'} ${scored.score}`, emails.length ? `${emails.length} verified email(s)` : formUrl ? 'contact form only' : 'no contact found', `${evidenceSignals.length} evidence signal(s)`]
     return { status: 'done', prospectId, message: summary.join(', ') }
   } catch (err) {
     if (err instanceof AppError && (err.code === 'duplicate' || err.code === 'possible_duplicate')) return { status: 'duplicate', message: err.message }

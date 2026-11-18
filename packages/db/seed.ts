@@ -1,6 +1,8 @@
 // Default rows inserted on first run. INSERT OR IGNORE keeps any later edits made in the app.
 import { normalizeDomain } from '../core/normalize'
 import { BRAND_SEEDS } from './brandSeeds'
+import { UGC_CATEGORIES, UGC_DEFAULT_SETTINGS, UGC_SEEDS } from '../ugc/seeds'
+import { DEFAULT_TEMPLATES } from '../ugc/templateDefaults'
 import { get, nowIso, run, tx, type DB } from './sql'
 
 export const BUSINESS_EMAIL = 'ironmancarterbusiness@gmail.com'
@@ -50,6 +52,8 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   'research.requestDelayMs': 1500,
   'research.concurrency': 3,
   'research.useAiForConcepts': true,
+
+  ...UGC_DEFAULT_SETTINGS,
 }
 
 export const CATEGORIES = [
@@ -154,9 +158,22 @@ export function seed(db: DB) {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.slug, p.name, p.deliverables, p.min, p.max, p.unit, p.recurring ? 1 : 0, i + 1, PACKAGE_NOTE, now)
       })
     }
+    // UGC campaign (migration 009): its own categories, candidates and templates. A domain already in the
+    // sponsorship pool is skipped by INSERT OR IGNORE, so no company is seeded into both campaigns.
+    const hasUgc = !!get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'email_templates'")
+    if (hasUgc) {
+      UGC_CATEGORIES.forEach((c, i) => {
+        run(db, `INSERT OR IGNORE INTO categories (slug, name, description, sort_order, campaign_type) VALUES (?, ?, ?, ?, 'ugc')`,
+          c.slug, c.name, c.description, 100 + i)
+      })
+      for (const t of DEFAULT_TEMPLATES) {
+        run(db, `INSERT OR IGNORE INTO email_templates (slug, campaign_type, kind, name, subject, body, default_subject, default_body, sort_order, updated_at)
+          VALUES (?, 'ugc', ?, ?, ?, ?, ?, ?, ?, ?)`, t.slug, t.kind, t.name, t.subject, t.body, t.subject, t.body, t.sort_order, now)
+      }
+    }
     // The candidate pool only exists from migration 002 onward.
     if (get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'candidate_pool'")) {
-      for (const [slug, brands] of Object.entries(BRAND_SEEDS)) {
+      for (const [slug, brands] of Object.entries(hasUgc ? { ...BRAND_SEEDS, ...UGC_SEEDS } : BRAND_SEEDS)) {
         const cat = get<{ id: number }>(db, 'SELECT id FROM categories WHERE slug = ?', slug)
         if (!cat) continue
         for (const [name, website] of brands) {

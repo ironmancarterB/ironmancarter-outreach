@@ -37,7 +37,7 @@ export function overview(db: DB, now = new Date()) {
       sum(CASE WHEN stage = 'won' AND payment_status = 'paid' THEN negotiated_value_cents END) AS collected,
       sum(CASE WHEN stage IN ('replied', 'negotiating', 'proposal_sent') THEN COALESCE(negotiated_value_cents, potential_value_cents) END) AS pipeline,
       count(CASE WHEN stage = 'won' THEN 1 END) AS wonCount
-    FROM prospects`)!
+    FROM prospects WHERE campaign_type = 'sponsorship'`)!
 
   const leads = listLeads(db)
   return {

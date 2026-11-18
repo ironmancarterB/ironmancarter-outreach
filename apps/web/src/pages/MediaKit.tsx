@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Loading, Notice, PageHeader, Textarea, useToast } from '../components/ui'
+import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Loading, Notice, PageHeader, Textarea, useToast, Select } from '../components/ui'
 import { api, useApi } from '../lib/api'
 import { bytes, dateTime } from '../lib/format'
 import type { MediaKit } from '../lib/types'
@@ -47,6 +47,7 @@ export default function MediaKitPage() {
                 className={`block w-full rounded-xl border p-4 text-left shadow-sm transition-colors ${k.id === selected ? 'border-brand-500 bg-white dark:bg-zinc-900' : 'border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900'}`}>
                 <div className="flex items-center gap-2">
                   <span className="font-medium">v{k.version} · {k.label}</span>
+                  {k.kind === 'ugc' ? <Badge tone="violet">UGC</Badge> : null}
                   {k.is_default ? <Badge tone="green">Default</Badge> : null}
                 </div>
                 <div className="mt-1 text-xs text-zinc-500">{k.page_count ?? '?'} pages · {bytes(k.size_bytes)} · {dateTime(k.created_at)}</div>
@@ -106,6 +107,7 @@ function UploadForm({ onDone }: { onDone: (id: number) => void }) {
   const [label, setLabel] = useState('')
   const [notes, setNotes] = useState('')
   const [makeDefault, setMakeDefault] = useState(true)
+  const [kind, setKind] = useState<'sponsorship' | 'ugc'>('sponsorship')
   const [busy, setBusy] = useState(false)
   const submit = async () => {
     if (!file) return
@@ -115,6 +117,7 @@ function UploadForm({ onDone }: { onDone: (id: number) => void }) {
       form.append('label', label)
       form.append('notes', notes)
       form.append('makeDefault', String(makeDefault))
+      form.append('kind', kind)
       form.append('file', file)
       const r = await api.post<{ kit: MediaKit; duplicate: boolean }>('/api/media-kits', form)
       toast(r.duplicate ? `That exact file is already v${r.kit.version}` : `Imported v${r.kit.version}`)
@@ -133,7 +136,13 @@ function UploadForm({ onDone }: { onDone: (id: number) => void }) {
           <Field label="Label"><Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. November 2026 numbers" /></Field>
           <Field label="Notes"><Textarea className="min-h-10" value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
         </div>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Make this the default attachment</label>
+        <Field label="What is it?" hint="Sponsorship pitches attach the media kit; UGC pitches attach the UGC rate card / portfolio PDF (optional). They are never mixed.">
+          <Select value={kind} onChange={(e) => setKind(e.target.value as 'sponsorship' | 'ugc')}>
+            <option value="sponsorship">Sponsorship media kit</option>
+            <option value="ugc">UGC rate card or portfolio PDF</option>
+          </Select>
+        </Field>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Make this the default {kind === 'ugc' ? 'UGC ' : ''}attachment</label>
         <Notice>The PDF is copied into the app's data folder. Your original file is not moved or changed.</Notice>
         <div className="flex justify-end"><Button variant="primary" disabled={!file || busy} onClick={submit}>{busy ? 'Uploading…' : 'Upload'}</Button></div>
       </div>

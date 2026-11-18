@@ -41,6 +41,8 @@ export function allowedNumbers(f: Facts): Set<string> {
   add(f.options.custom_rate_text); add(f.options.custom_deliverables); add(f.pkg?.deliverables); add(f.prospect.concept)
   for (const e of f.evidence) add(e.snippet)
   add(f.prospect.products); add(f.prospect.name) // brand names can contain digits (8BitDo, 1Password)
+  for (const c of f.ugc?.concepts ?? []) { add(c.title); add(c.outline) }
+  add(f.ugc?.portfolio.link)
   return out
 }
 
@@ -64,9 +66,27 @@ export function runChecks(f: Facts, subject: string | null, body: string): { che
   const otherEmails = (body.match(EMAIL_RE) ?? []).filter((e) => e.toLowerCase() !== f.business.email.toLowerCase())
   if (otherEmails.length) block('other_email', `Contains an email address that is not yours: ${[...new Set(otherEmails)].join(', ')}`)
 
-  const allowedHosts = new Set([f.prospect.domain, f.mediaKit?.public_url ? normalizeDomain(f.mediaKit.public_url) : null].filter(Boolean))
+  const ugc = f.campaignType === 'ugc' ? f.ugc : null
+  const allowedHosts = new Set([f.prospect.domain, f.mediaKit?.public_url ? normalizeDomain(f.mediaKit.public_url) : null, ugc?.portfolio.link ? normalizeDomain(ugc.portfolio.link) : null].filter(Boolean))
   const badUrls = (body.match(URL_RE) ?? []).filter((u) => !allowedHosts.has(normalizeDomain(u)))
-  if (badUrls.length) block('unknown_url', `Links to a site that is neither the brand's nor your media kit: ${badUrls.join(', ')}`)
+  if (badUrls.length) block('unknown_url', `Links to a site that is neither the brand's nor ${ugc ? 'your checked UGC portfolio' : 'your media kit'}: ${badUrls.join(', ')}`)
+
+  if (ugc) {
+    // UGC: your live portfolio link is required, and only the exact checked link may appear.
+    if (!ugc.portfolio.usable) block('portfolio', ugc.portfolio.reason ?? 'Your UGC portfolio link is not verified.')
+    else if (!body.includes(ugc.portfolio.link!)) block('portfolio', `Include your UGC portfolio link (${ugc.portfolio.link}).`)
+    const otherPortfolio = (body.match(URL_RE) ?? []).filter((u) => ugc.portfolio.link && normalizeDomain(u) === normalizeDomain(ugc.portfolio.link) && u.replace(/[.,]$/, '') !== ugc.portfolio.link)
+    if (otherPortfolio.length) block('portfolio', `Only your checked portfolio page may be linked, not ${otherPortfolio.join(', ')}.`)
+    if (/\b(i('ve| have) (used|been using|tried)|i use (it|your)|as a (long-?time |happy )?(user|customer)|i('m| am) a (big )?fan of your)\b/i.test(body)) {
+      block('product_use', "Says you've used the product, which is not on record. Only say it if it's true and you add a note.")
+    }
+    if (/\b(my (past |previous |current )?clients|brands i('ve| have) worked with|for clients like|i('ve| have) (made|created|produced) (videos|content|ugc) for [A-Z]|results (i|we) (got|drove))\b/i.test(body)) {
+      block('past_clients', 'Mentions past clients or results. Only include clients and results you can point to.')
+    }
+    if (/\b(followers?|subscribers?|audience of|views? (a|per) month|monthly views)\b/i.test(body)) warn('followers', "UGC pitches shouldn't lead with follower or view counts; brands are paying for the videos, not your audience.")
+    if (/\bi love your (brand|product|company|app)\b/i.test(body)) warn('generic_love', '"I love your brand" reads as generic unless you can say why.')
+    if (!ugc.concepts.length || !ugc.concepts.some((c) => body.includes(c.title))) warn('concept', 'No researched video concept in the email. Each UGC pitch should include one or two specific ideas.')
+  }
 
   const scrubbed = body.replace(URL_RE, ' ').replace(EMAIL_RE, ' ')
   const allowed = allowedNumbers(f)
@@ -105,14 +125,14 @@ export function runChecks(f: Facts, subject: string | null, body: string): { che
     if (!subject?.trim()) block('subject', 'An email needs a subject line.')
     else if (/^\s*(re|fwd?):/i.test(subject)) block('subject', 'The subject must not pretend to be a reply or forward.')
     else if (subject.length > 90) warn('subject', 'The subject line is long.')
-    if (!lower.includes('media kit')) warn('media_kit', 'Does not mention the attached media kit.')
+    if (!ugc && !lower.includes('media kit')) warn('media_kit', 'Does not mention the attached media kit.')
     if (!f.contact?.email) block('recipient', 'No verified business email to address this to. Use the manual submission channel.')
     else if (f.contact.eligibility.status === 'ineligible') block('recipient', `${f.contact.email} cannot be emailed: ${f.contact.eligibility.reasons[0]}`)
     else if (f.contact.eligibility.status === 'needs_review') warn('recipient', `Recipient needs your review before any future sending: ${f.contact.eligibility.reasons.join('; ')}`)
   } else if (!f.application) {
     block('application_url', 'No verified creator portal or contact form URL to submit this through.')
   }
-  if (!f.mediaKit) warn('media_kit', 'No default media kit to reference.')
+  if (!ugc && !f.mediaKit) warn('media_kit', 'No default media kit to reference.')
 
   return { checks, wordCount: words }
 }

@@ -19,7 +19,11 @@ export interface MediaKit {
   public_url: string | null
   notes: string | null
   created_at: string
+  kind: MediaKitKind
 }
+
+// The sponsorship media kit and the UGC rate card / portfolio PDF are separate, each with its own default.
+export type MediaKitKind = 'sponsorship' | 'ugc'
 
 // Gmail's limit is 25 MB per message; leave room for the email body and encoding overhead.
 export const MAX_MEDIA_KIT_BYTES = 15 * 1024 * 1024
@@ -32,9 +36,10 @@ export function countPdfPages(buf: Buffer): number | null {
 }
 
 export function importMediaKit(db: DB, dataDir: string, input: {
-  buffer: Buffer; originalFilename: string; label?: string; notes?: string | null; makeDefault?: boolean
+  buffer: Buffer; originalFilename: string; label?: string; notes?: string | null; makeDefault?: boolean; kind?: MediaKitKind
 }): { kit: MediaKit; duplicate: boolean } {
   const { buffer } = input
+  const kind: MediaKitKind = input.kind === 'ugc' ? 'ugc' : 'sponsorship'
   if (!buffer.length) throw invalid('The file is empty')
   if (buffer.subarray(0, 5).toString('latin1') !== '%PDF-') throw invalid('The file is not a PDF')
   if (buffer.length > MAX_MEDIA_KIT_BYTES) throw invalid(`The PDF is larger than ${MAX_MEDIA_KIT_BYTES / 1024 / 1024} MB`)
@@ -48,16 +53,16 @@ export function importMediaKit(db: DB, dataDir: string, input: {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, storedFilename), buffer, { flag: 'wx' })
 
-  const isFirst = !get(db, 'SELECT 1 FROM media_kits LIMIT 1')
+  const isFirst = !get(db, 'SELECT 1 FROM media_kits WHERE kind = ? LIMIT 1', kind)
   const makeDefault = input.makeDefault || isFirst
   const id = tx(db, () => {
-    if (makeDefault) run(db, 'UPDATE media_kits SET is_default = 0 WHERE is_default = 1')
-    return run(db, `INSERT INTO media_kits (version, label, original_filename, stored_filename, sha256, size_bytes, page_count, is_default, notes, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    if (makeDefault) run(db, 'UPDATE media_kits SET is_default = 0 WHERE is_default = 1 AND kind = ?', kind)
+    return run(db, `INSERT INTO media_kits (version, label, original_filename, stored_filename, sha256, size_bytes, page_count, is_default, notes, created_at, kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       version, input.label?.trim() || `Version ${version}`, input.originalFilename, storedFilename, sha256, buffer.length,
-      countPdfPages(buffer), makeDefault ? 1 : 0, input.notes ?? null, nowIso()).lastId
+      countPdfPages(buffer), makeDefault ? 1 : 0, input.notes ?? null, nowIso(), kind).lastId
   })
-  logActivity(db, 'media_kit.imported', `Imported media kit v${version} (${input.originalFilename})${makeDefault ? ' as default' : ''}`,
+  logActivity(db, 'media_kit.imported', `Imported ${kind === 'ugc' ? 'UGC rate card / portfolio PDF' : 'media kit'} v${version} (${input.originalFilename})${makeDefault ? ' as default' : ''}`,
     { data: { sha256, size: buffer.length } })
   return { kit: getMediaKit(db, id), duplicate: false }
 }
@@ -70,15 +75,15 @@ export function getMediaKit(db: DB, id: number): MediaKit {
   return kit
 }
 
-export const getDefaultMediaKit = (db: DB) => get<MediaKit>(db, 'SELECT * FROM media_kits WHERE is_default = 1')
+export const getDefaultMediaKit = (db: DB, kind: MediaKitKind = 'sponsorship') => get<MediaKit>(db, 'SELECT * FROM media_kits WHERE is_default = 1 AND kind = ?', kind)
 
 export function setDefaultMediaKit(db: DB, id: number): MediaKit {
   const kit = getMediaKit(db, id)
   tx(db, () => {
-    run(db, 'UPDATE media_kits SET is_default = 0 WHERE is_default = 1')
+    run(db, 'UPDATE media_kits SET is_default = 0 WHERE is_default = 1 AND kind = ?', kit.kind)
     run(db, 'UPDATE media_kits SET is_default = 1 WHERE id = ?', id)
   })
-  logActivity(db, 'media_kit.default', `Media kit v${kit.version} is now the default attachment`)
+  logActivity(db, 'media_kit.default', `${kit.kind === 'ugc' ? 'UGC rate card' : 'Media kit'} v${kit.version} is now the default ${kit.kind === 'ugc' ? 'UGC ' : ''}attachment`)
   return getMediaKit(db, id)
 }
 

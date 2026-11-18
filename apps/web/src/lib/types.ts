@@ -57,6 +57,7 @@ export interface ProspectDetail {
   prospect: ProspectListItem & {
     sponsorship_evidence: string | null
     campaign_concept: string | null
+    campaign_type?: 'sponsorship' | 'ugc'
     fit_breakdown: Record<string, number> | null
     fit_explanation: string | null
     research_confidence: 'low' | 'medium' | 'high' | null
@@ -173,7 +174,12 @@ export interface PitchView {
     generation_note: string | null; options: PitchOptions; claims: Claim[]; flags: Flag[]; media_kit_id: number | null; edited: number
     reviewed_at: string | null; reject_reason: string | null; created_at: string; updated_at: string
   }
-  company: { id: number; name: string; domain: string | null; category: string | null; fitScore: number | null; reviewStatus: string }
+  company: { id: number; name: string; domain: string | null; category: string | null; fitScore: number | null; reviewStatus: string; campaignType?: 'sponsorship' | 'ugc' }
+  ugc?: {
+    concepts: { title: string; outline: string; basis: string }[]
+    signals: { id: number; label: string; url: string; snippet: string | null }[]
+    portfolio: { url: string | null; usable: boolean; link: string | null; reason: string | null }
+  } | null
   program: { type: ProgramType; label: string; basis: string; overridden: boolean }
   recipient: { id: number; email: string | null; role: string | null; verification_status: string; verified_at: string | null; source_url: string | null; eligibility: Eligibility } | null
   application: { url: string; retrievedAt: string | null; origin: 'research' | 'manual' } | null
@@ -257,6 +263,7 @@ export interface MediaKit {
   public_url: string | null
   notes: string | null
   created_at: string
+  kind?: 'sponsorship' | 'ugc'
 }
 
 export interface Metric {

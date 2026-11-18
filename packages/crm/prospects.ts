@@ -39,6 +39,8 @@ export interface Prospect {
   reviewed_at: string | null
   last_researched_at: string | null
   program_type_override: 'paid_sponsorship' | 'creator_partnerships' | 'affiliate_only' | 'unknown' | null
+  campaign_type: 'sponsorship' | 'ugc'
+  ugc_concepts: string | null
   created_at: string
   updated_at: string
 }
@@ -342,6 +344,7 @@ export interface ListFilters {
   tier?: 'A' | 'B' | 'C'
   review?: 'pending' | 'approved' | 'rejected'
   source?: Prospect['source']
+  campaign?: 'sponsorship' | 'ugc'
   sort?: 'updated' | 'created' | 'name' | 'score' | 'value'
   dir?: 'asc' | 'desc'
 }
@@ -375,6 +378,7 @@ export function listProspects(db: DB, f: ListFilters = {}): ProspectListItem[] {
   if (f.tier === 'C') where.push('p.fit_score < 60')
   if (f.review) { where.push('p.review_status = ?'); params.push(f.review) }
   if (f.source) { where.push('p.source = ?'); params.push(f.source) }
+  if (f.campaign) { where.push('p.campaign_type = ?'); params.push(f.campaign) }
   const order = `${SORTS[f.sort ?? 'updated'] ?? SORTS.updated} ${f.dir === 'asc' ? 'ASC' : 'DESC'}, p.id DESC`
   const rows = all<Prospect & { category_name: string | null; tag_list: string | null; contact_count: number; primary_email: string | null }>(db, `
     SELECT p.*, cat.name AS category_name,

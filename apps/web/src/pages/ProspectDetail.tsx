@@ -7,6 +7,7 @@ import { navigate } from '../lib/router'
 import { STAGES } from '../../../../packages/core/stages'
 import { MessageList } from './Outreach'
 import { FIT_FACTORS, fitTier } from '../../../../packages/core/scoring'
+import { UGC_FIT_LABELS } from '../../../../packages/ugc/research'
 
 // Mirrors REVIEW_REQUIRED_STAGES on the server (packages/crm/prospects.ts), which enforces it.
 const REVIEW_STAGES: string[] = ['draft_ready', 'awaiting_approval', 'approved_autopilot', 'contacted']
@@ -395,7 +396,7 @@ function FitSection({ d, mutate }: { d: Detail; mutate: Mutate }) {
         <div className="space-y-2 text-sm">
           {FIT_FACTORS.map((f) => (
             <div key={f.key} className="grid grid-cols-[1fr_8rem_3rem] items-center gap-3">
-              <span className="text-zinc-600 dark:text-zinc-400">{f.label}</span>
+              <span className="text-zinc-600 dark:text-zinc-400">{p.campaign_type === 'ugc' ? UGC_FIT_LABELS[f.key] ?? f.label : f.label}</span>
               <span className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800"><span className="block h-1.5 rounded-full bg-brand-500" style={{ width: `${((p.fit_breakdown?.[f.key] ?? 0) / f.max) * 100}%` }} /></span>
               <span className="text-right tabular-nums">{p.fit_breakdown?.[f.key] ?? 0}/{f.max}</span>
             </div>

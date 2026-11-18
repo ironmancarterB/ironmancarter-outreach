@@ -277,6 +277,42 @@ If you send an app draft from Gmail yourself, the next sync records it like an a
 - **Holidays** are only the ones you list.
 - **Sync is manual** ("Check Gmail for replies"); nothing polls Gmail in the background.
 
+## UGC client acquisition
+
+A second campaign type on the same CRM, research, Gmail and sending workflow, for companies that pay you to make
+videos they run themselves (ads, social, website). Open **UGC Clients** in the sidebar.
+
+- **Campaign separation.** Every company is either a sponsorship or a UGC company (`prospects.campaign_type`). One CRM
+  record per domain and one first email per company apply across both, so the two campaigns can never email the same
+  brand twice. UGC has its own categories and candidate list; a domain already in the sponsorship pool or CRM is skipped.
+- **Research.** The same polite crawler (robots.txt respected, public pages only, $0) also records UGC signals: TikTok,
+  YouTube and Instagram profiles linked from the site, product videos, free plans, app-store links and UGC or creator
+  mentions. A UGC lead score (product relevance, video-advertising evidence, recurring work, fit with your experience,
+  contact verification, likelihood of hiring creators) and one or two video concepts built from the site's own
+  description are saved with the source of each fact.
+- **Daily volume.** On business days the worker researches until the day's target of qualified leads is met (default
+  25; 50 or 100 allowed in UGC → Settings), one batch a day. A lead counts only with a qualifying, sourced email and a
+  lead score at or above the minimum (default 50). Shortfalls are reported, never filled with weak leads. Prospecting
+  volume never changes any sending limit.
+- **Pitches.** UGC templates (editable in UGC → Templates) lead with what you make, never with follower counts. Checks
+  block claims of having used the product, past clients or results, unchecked links and unfilled variables. Pricing is
+  never in a first email; the pricing and retainer proposals are templates you open from a deal and copy yourself.
+- **Portfolio link.** Set it on the UGC page. It is fetched and must be a live, finished page on the same site before
+  any email uses it, and it is re-checked daily. Until then, UGC pitches stay in the app and cannot be approved.
+- **Review and sending.** UGC pitches are copied into Gmail as drafts for your review before approval. Approving the
+  pitch approves the company. Sending uses the existing prepare → confirm flow and the shared daily limits;
+  autopilot never sends UGC first emails or UGC follow-ups.
+- **Attachments.** The UGC rate card or portfolio PDF (Media Kit page → "UGC rate card") is separate from the
+  sponsorship media kit and attached only to UGC pitches; the sponsorship kit is never attached to them.
+- **Follow-ups.** First after 5 business days, final after 11 (configurable), from the UGC templates, each needing your
+  approval. They stop on a reply, decline, opt-out, bounce or closed deal.
+- **Deals and revenue.** UGC deals track deliverables, video count, quoted and agreed price, usage rights (paid ads need
+  a duration; perpetual usage needs its own license fee), raw footage, exclusivity, revisions, deadline, contract and
+  payment. Revenue booked counts only booked projects with an agreed price; collected counts recorded payments.
+  Sponsorship revenue is reported separately.
+- **Pipeline and reports.** Fourteen UGC stages, derived from stored facts, with daily, weekly and monthly metrics,
+  conversion rates and today's operating cost (research and DNS checks are free; AI is $0 on the mock provider).
+
 ## Where things live
 
 | Path | Contents |

@@ -127,7 +127,8 @@ export function inSendWindow(db: DB, now = new Date()) {
 // Brands autopilot may write to: actionable (qualifying public email, not contacted, not excluded) and needing
 // nothing from you (country, freshness). Best partnership fit first.
 export function candidates(db: DB, now = new Date()): Lead[] {
-  return listLeads(db).filter((l) => l.actionable && !l.needs_before_send.length && l.outreach_status !== 'gmail_draft' && !held(db, `p:${l.id}`, now))
+  // Sponsorship only: UGC emails are never sent without your approval of each one.
+  return listLeads(db).filter((l) => l.campaign_type === 'sponsorship' && l.actionable && !l.needs_before_send.length && l.outreach_status !== 'gmail_draft' && !held(db, `p:${l.id}`, now))
 }
 
 const sentToday = (db: DB, now: Date, kind: 'initial' | 'follow_up') => get<{ n: number }>(db,
@@ -199,7 +200,9 @@ async function followUpStep(db: DB, deps: GmailDeps, opts: { dataDir: string; ai
     return false
   }
   reconcileFollowUps(db)
-  const due = all<FollowUpRow>(db, "SELECT * FROM follow_ups WHERE status IN ('scheduled', 'approved') AND due_at <= ? ORDER BY due_at, sequence", now.toISOString())
+  // UGC follow-ups wait for your approval; autopilot only handles sponsorship follow-ups.
+  const due = all<FollowUpRow>(db, `SELECT f.* FROM follow_ups f JOIN prospects p ON p.id = f.prospect_id
+    WHERE f.status IN ('scheduled', 'approved') AND f.due_at <= ? AND p.campaign_type = 'sponsorship' ORDER BY f.due_at, f.sequence`, now.toISOString())
   for (const row of due) {
     const key = `f:${row.id}`
     if (held(db, key, now)) continue

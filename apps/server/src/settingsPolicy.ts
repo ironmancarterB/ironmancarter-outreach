@@ -50,6 +50,9 @@ export const LOCKED: Record<string, string> = {
   'outreach.mode': 'The operating mode is fixed; sending is manual only.',
   'outreach.sendingTier': 'Sending tiers change only with your explicit approval.',
   'outreach.emergencyStop': 'Use the STOP ALL OUTREACH and Resume controls in Outreach Controls.',
+  'ugc.portfolioUrl': 'Set the UGC portfolio link on the UGC page; it is checked live before any email uses it.',
+  'ugc.portfolioCheck': 'Written by the live portfolio check.',
+  'ugc.lastDaily': 'Written by the daily UGC run.',
 }
 
 export const VALIDATORS: Record<string, Validator> = {
@@ -108,6 +111,25 @@ export const VALIDATORS: Record<string, Validator> = {
     const totalPerDay = num(0, 75)(o.totalPerDay) as number
     return { newPerDay: Math.round(newPerDay), followUpsPerDay: Math.round(followUpsPerDay), totalPerDay: Math.round(totalPerDay) }
   },
+  // UGC research volume. Prospecting targets never change sending limits.
+  'ugc.research': (v) => {
+    const o = obj(v)
+    if (typeof o.autoDaily !== 'boolean' || typeof o.autoDraft !== 'boolean') throw invalid('autoDaily and autoDraft must be true or false')
+    return { dailyTarget: Math.round(num(1, 200)(o.dailyTarget) as number), autoDaily: o.autoDaily, minScore: Math.round(num(0, 100)(o.minScore) as number), autoDraft: o.autoDraft }
+  },
+  'ugc.followUps': (v) => {
+    const o = obj(v)
+    const first = Math.round(num(3, 10)(o.firstAfterBusinessDays) as number)
+    const second = Math.round(num(4, 20)(o.secondAfterBusinessDays) as number)
+    if (second <= first) throw invalid('The final follow-up must come after the first')
+    return { firstAfterBusinessDays: first, secondAfterBusinessDays: second, max: Math.round(num(0, 2)(o.max) as number) }
+  },
+  'ugc.pricing': (v) => {
+    const o = obj(v)
+    const k = ['oneVideoUsd', 'threeVideosUsd', 'fiveVideosUsd', 'monthlyFourFromUsd'] as const
+    return Object.fromEntries(k.map((key) => [key, Math.round(num(1, 100000)(o[key]) as number)]))
+  },
+  'ugc.costs': (v) => ({ dailyAlertUsd: num(0, 1000)(obj(v).dailyAlertUsd) }),
   'outreach.autoEligibleJurisdictions': (v) => {
     if (!Array.isArray(v) || v.some((j) => typeof j !== 'string' || !/^[A-Za-z]{2}$/.test(j))) throw invalid('Expected 2-letter country codes')
     return [...new Set((v as string[]).map((j) => j.toUpperCase()))]

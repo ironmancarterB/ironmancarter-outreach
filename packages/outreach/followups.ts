@@ -9,6 +9,8 @@ import { composeBody, contentHash, createDraft, getDraftRow, verifyDraft, type D
 import { GoogleError, headerValue } from '../gmail/google'
 import { boundaryFor, buildMessage } from '../gmail/mime'
 import { addBusinessDays, calendar } from './businessDays'
+import { portfolioStatus } from '../ugc/portfolio'
+import { getTemplate, renderTemplate } from '../ugc/templates'
 import { applySignature, endsWithSignature, getSignature } from '../pitch/signature'
 
 export interface FollowUpRow {
@@ -77,9 +79,20 @@ const originalOf = (db: DB, f: Pick<FollowUpRow, 'initial_send_id'>) => get<Send
 const longDate = (iso: string, timezone: string) => new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: timezone })
 
 export function followUpText(db: DB, prospectId: number, sequence: 1 | 2, original: { sentAt: string; subject: string | null; body: string }) {
-  const company = get<{ company_name: string }>(db, 'SELECT company_name FROM prospects WHERE id = ?', prospectId)?.company_name ?? 'your team'
+  const prospect = get<{ company_name: string; campaign_type: string; ugc_concepts: string | null }>(db, 'SELECT company_name, campaign_type, ugc_concepts FROM prospects WHERE id = ?', prospectId)
+  const company = prospect?.company_name ?? 'your team'
   const greeting = original.body.split('\n')[0].match(/^(Hi|Hello|Hey) .{1,80},$/)?.[0] ?? 'Hi there,'
   const when = longDate(original.sentAt, calendar(db).timezone)
+  if (prospect?.campaign_type === 'ugc') {
+    // UGC follow-ups come from your editable templates (UGC → Templates).
+    const t = getTemplate(db, sequence === 1 ? 'ugc_follow_up_1' : 'ugc_follow_up_2')
+    const concepts = (() => { try { return JSON.parse(prospect.ugc_concepts ?? '[]') as { title: string }[] } catch { return [] } })()
+    // The portfolio link is repeated only while it still passes its live check.
+    const link = portfolioStatus(db).link
+    const text = renderTemplate(t.body, { greeting, company, original_date: when, concept_short: concepts[0]?.title ?? 'first video', portfolio_line: link ? `My portfolio is here if it's useful: ${link}` : '' })
+    const subject = original.subject ? (/^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject}`) : 'Re: video ideas'
+    return { subject, body: applySignature(text, getSignature(db)) }
+  }
   const middle = sequence === 1
     ? [`Just following up on my email from ${when} about a possible sponsored collaboration between ${company} and my gaming channel. I'm happy to adjust the idea or send any details you need, and my media kit is attached to that first email.`,
       'Would a quick call, or a short reply with next steps, work for you?']
@@ -117,7 +130,9 @@ export function followUpChecks(db: DB, f: Pick<FollowUpRow, 'body' | 'initial_se
 
 export function scheduleFollowUps(db: DB, send: SendRow) {
   if (send.kind !== 'initial' || send.status !== 'sent' || !send.prospect_id) return 0
-  const cfg = getSetting<{ firstAfterBusinessDays: number; secondAfterBusinessDays: number; max: number }>(db, 'outreach.followUps')
+  const isUgc = get<{ campaign_type: string }>(db, 'SELECT campaign_type FROM prospects WHERE id = ?', send.prospect_id)?.campaign_type === 'ugc'
+  // UGC has its own cadence (first after 5 business days, final after another 6 by default).
+  const cfg = getSetting<{ firstAfterBusinessDays: number; secondAfterBusinessDays: number; max: number }>(db, isUgc ? 'ugc.followUps' : 'outreach.followUps')
   const cal = calendar(db)
   const sentAt = send.sent_at ?? nowIso()
   const draft = send.draft_row_id ? get<{ pitch_id: number | null }>(db, 'SELECT pitch_id FROM gmail_drafts WHERE id = ?', send.draft_row_id) : undefined
@@ -137,7 +152,7 @@ export function scheduleFollowUps(db: DB, send: SendRow) {
     const first = get<{ due_at: string }>(db, `SELECT due_at FROM follow_ups WHERE initial_send_id = ? ORDER BY sequence LIMIT 1`, send.id)
     // Your own reminder date is kept if you set one.
     if (first) run(db, 'UPDATE prospects SET next_follow_up_date = COALESCE(next_follow_up_date, ?) WHERE id = ?', first.due_at.slice(0, 10), send.prospect_id)
-    logActivity(db, 'followup.scheduled', `Scheduled ${created} follow-up${created === 1 ? '' : 's'} for review (${cfg.firstAfterBusinessDays} and ${cfg.secondAfterBusinessDays} business days). ${getSetting<boolean>(db, 'outreach.autopilotEnabled') ? ' Autopilot sends them when due unless the brand replies, opts out or bounces.' : ' None will be sent automatically.'}`, { prospectId: send.prospect_id })
+    logActivity(db, 'followup.scheduled', `Scheduled ${created} follow-up${created === 1 ? '' : 's'} for review (${cfg.firstAfterBusinessDays} and ${cfg.secondAfterBusinessDays} business days). ${!isUgc && getSetting<boolean>(db, 'outreach.autopilotEnabled') ? ' Autopilot sends them when due unless the brand replies, opts out or bounces.' : ' None will be sent without your approval.'}`, { prospectId: send.prospect_id })
   }
   return created
 }

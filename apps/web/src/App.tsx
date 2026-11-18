@@ -14,6 +14,7 @@ import Deals from './pages/Deals'
 import Revenue from './pages/Revenue'
 import MediaKitPage from './pages/MediaKit'
 import Settings from './pages/Settings'
+import Ugc from './pages/Ugc'
 
 const NAV = [
   { id: 'overview', label: 'Overview', icon: '◎' },
@@ -24,6 +25,7 @@ const NAV = [
   { id: 'outreach', label: 'Outreach', icon: '➤' },
   { id: 'replies', label: 'Conversations', icon: '✉' },
   { id: 'follow-ups', label: 'Follow-ups', icon: '↻' },
+  { id: 'ugc', label: 'UGC Clients', icon: '▶' },
   { id: 'autopilot', label: 'Outreach Controls', icon: '⏻' },
   { id: 'deals', label: 'Deals', icon: '◆' },
   { id: 'revenue', label: 'Revenue Analytics', icon: '▲' },
@@ -75,6 +77,7 @@ export default function App() {
       case 'sent': return <Outreach tab="sent" />
       case 'replies': return <Outreach tab="conversations" />
       case 'follow-ups': return <Outreach tab="follow-ups" />
+      case 'ugc': return <Ugc tab={parts[0]} />
       case 'deals': return <Deals />
       case 'revenue': return <Revenue />
       case 'media-kit': return <MediaKitPage />
@@ -92,7 +95,7 @@ export default function App() {
             <div className="grid h-9 w-9 place-items-center rounded-lg bg-brand-600 text-sm font-bold text-white">IC</div>
             <div>
               <div className="text-sm font-semibold leading-tight">IronmanCarter</div>
-              <div className="text-xs text-zinc-500">Sponsorship Outreach</div>
+              <div className="text-xs text-zinc-500">Sponsorship + UGC Outreach</div>
             </div>
           </div>
           <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Main">

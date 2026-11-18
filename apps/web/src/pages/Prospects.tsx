@@ -31,6 +31,7 @@ export default function Prospects({ openId }: { openId: number | null }) {
   const [tier, setTier] = useState('')
   const [tag, setTag] = useState('')
   const [lead, setLead] = useState('usable')
+  const [campaign, setCampaign] = useState('')
   const [sort, setSort] = useState('updated')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
   const [showNew, setShowNew] = useState(false)
@@ -41,7 +42,7 @@ export default function Prospects({ openId }: { openId: number | null }) {
     return () => clearTimeout(t)
   }, [q])
 
-  const qs = new URLSearchParams(Object.entries({ q: debouncedQ, stage, category_id: category, tier, tag, sort, dir, lead }).filter(([, v]) => v)).toString()
+  const qs = new URLSearchParams(Object.entries({ q: debouncedQ, stage, category_id: category, tier, tag, sort, dir, lead, campaign }).filter(([, v]) => v)).toString()
   const { data, error, reload } = useApi<ProspectListItem[]>(`/api/prospects?${qs}`)
   const { data: categories } = useApi<Category[]>('/api/categories')
   const { data: tags } = useApi<{ name: string; count: number }[]>(`/api/tags?r=${data?.length ?? 0}`)
@@ -65,7 +66,7 @@ export default function Prospects({ openId }: { openId: number | null }) {
     <>
       <PageHeader
         title="Prospects"
-        subtitle="Sponsorship CRM: every company, contact, source and stage change is recorded."
+        subtitle="CRM for sponsorship and UGC companies: every company, contact, source and stage change is recorded."
         actions={<>
           <a href="/api/export/prospects.csv"><Button>Export CSV</Button></a>
           <Button onClick={() => setShowImport(true)}>Import CSV</Button>
@@ -75,6 +76,11 @@ export default function Prospects({ openId }: { openId: number | null }) {
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Input className="max-w-xs" placeholder="Search name, domain, email, tag…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+        <Select className="w-auto" value={campaign} onChange={(e) => setCampaign(e.target.value)} aria-label="Campaign">
+          <option value="">All campaigns</option>
+          <option value="sponsorship">Sponsorship</option>
+          <option value="ugc">UGC</option>
+        </Select>
         <Select className="w-auto" value={lead} onChange={(e) => setLead(e.target.value)} aria-label="Contact">
           <option value="usable">With a usable email</option>
           <option value="actionable">Actionable only</option>

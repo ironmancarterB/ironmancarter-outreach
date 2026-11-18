@@ -17,6 +17,8 @@ import { outreachPriority, PROGRAM_LABELS, type ProgramType } from './programTyp
 import { writeTemplate } from './template'
 import { ensureApplication } from './applications'
 import { applySignature, getSignature } from './signature'
+import { writeUgcPitch, templateSlugFor } from '../ugc/pitch'
+import { getTemplate } from '../ugc/templates'
 
 export interface PitchRow {
   id: number
@@ -73,9 +75,12 @@ export const getPitch = (db: DB, id: number) => {
 export async function generatePitch(db: DB, prospectId: number, rawOptions: Partial<PitchOptions> & Record<string, unknown>, deps: { ai?: RouterDeps; now?: Date; mailLookup?: MailLookup } = {}) {
   const options = cleanOptions(rawOptions)
   const prospect = getProspect(db, prospectId)
-  if (prospect.review_status !== 'approved') {
-    throw new AppError(409, 'review_required', `Approve ${prospect.company_name} in the review queue before drafting a pitch.`)
+  const ugc = prospect.campaign_type === 'ugc'
+  // UGC: the pitch is your review (approving it approves the company too), so a pending company can be drafted.
+  if (ugc ? prospect.review_status === 'rejected' : prospect.review_status !== 'approved') {
+    throw new AppError(409, 'review_required', ugc ? `${prospect.company_name} was rejected in review.` : `Approve ${prospect.company_name} in the review queue before drafting a pitch.`)
   }
+  if (ugc && options.channel !== 'email') throw invalid('UGC outreach is email only.')
   if (options.channel === 'email') await ensureMailDomains(db, prospectId, deps.mailLookup)
   const facts = gatherFacts(db, prospectId, options, deps.now)
   // Only qualifying leads may enter the email workflow. Manual submissions through a portal are unaffected.
@@ -85,12 +90,14 @@ export async function generatePitch(db: DB, prospectId: number, rawOptions: Part
   }
 
   // Local AI only when you selected Ollama; the template otherwise, or when the AI draft is unusable.
-  let draft = writeTemplate(facts)
+  let draft = ugc ? writeUgcPitch(facts, facts.ugc!, getTemplate(db, templateSlugFor(facts.prospect.categorySlug))) : writeTemplate(facts)
   let generator: PitchRow['generator'] = 'template'
   let aiModel: string | null = null
   const provider = getSetting<string>(db, 'ai.provider')
   let note = provider === 'mock' ? 'Written from the template (the offline mock provider is selected, so no AI was used).' : 'Written from the template.'
-  if (provider === 'ollama') {
+  if (ugc) {
+    note = `Written from the "${getTemplate(db, templateSlugFor(facts.prospect.categorySlug)).name}" UGC template with this company's researched concepts. No AI was used.`
+  } else if (provider === 'ollama') {
     const attempt = await writeWithLocalAI(db, facts, deps.ai)
     if (attempt.draft) {
       draft = attempt.draft
@@ -113,7 +120,8 @@ export async function generatePitch(db: DB, prospectId: number, rawOptions: Part
       prospectId, version, options.channel, facts.contact?.id ?? null, facts.contact?.email ?? null, options.channel === 'manual_form' ? facts.application?.url ?? null : null,
       draft.subject, draft.body, generator, aiModel, note, JSON.stringify(options), JSON.stringify(draft.claims), JSON.stringify(facts.flags), facts.mediaKit?.id ?? null, now, now).lastId
     if (options.channel === 'manual_form' && facts.application) ensureApplication(db, prospectId, facts.application)
-    if (['qualified', 'discovered', 'researching'].includes(prospect.stage)) setStage(db, prospectId, 'draft_ready', 'Pitch drafted')
+    // A UGC company still pending review stays where it is until you approve its pitch.
+    if (['qualified', 'discovered', 'researching'].includes(prospect.stage) && prospect.review_status === 'approved') setStage(db, prospectId, 'draft_ready', 'Pitch drafted')
     logActivity(db, 'pitch.generated', `Drafted ${options.channel === 'email' ? 'email' : 'manual submission'} pitch v${version} (${generator === 'ollama' ? `local AI ${aiModel}` : 'template'})`,
       { prospectId, data: { pitchId: id, flags: facts.flags.map((x) => x.code) } })
     return getPitch(db, id)
@@ -155,7 +163,8 @@ export function evaluatePitch(db: DB, p: PitchRow) {
   const { checks, wordCount } = runChecks(facts, p.subject, p.body)
   const claims = validateClaims(db, p.prospect_id, JSON.parse(p.claims) as Claim[], p.body)
   for (const c of claims) for (const problem of c.problems) checks.push({ level: 'warning', code: 'evidence_changed', message: `${problem}.` })
-  if (facts.prospect.reviewStatus !== 'approved') checks.push({ level: 'blocker', code: 'review', message: 'The company is no longer approved in the review queue.' })
+  const reviewOk = facts.campaignType === 'ugc' ? facts.prospect.reviewStatus !== 'rejected' : facts.prospect.reviewStatus === 'approved'
+  if (!reviewOk) checks.push({ level: 'blocker', code: 'review', message: facts.campaignType === 'ugc' ? 'The company was rejected in review.' : 'The company is no longer approved in the review queue.' })
   if (p.channel === 'email' && facts.contact) {
     const q = contactQualification(db, facts.contact, facts.prospect.domain)
     if (!q.qualifies) checks.push({ level: 'blocker', code: 'contact_unqualified', message: `${facts.contact.email} does not qualify: ${q.reasons.join(' ')}` })
@@ -172,6 +181,12 @@ export function approvePitch(db: DB, pitchId: number) {
   return tx(db, () => {
     run(db, "UPDATE pitches SET status = 'approved', reviewed_at = ?, updated_at = ?, recipient_email = ?, contact_id = ? WHERE id = ?",
       nowIso(), nowIso(), facts.contact?.email ?? p.recipient_email, facts.contact?.id ?? p.contact_id, pitchId)
+    // UGC: approving the pitch is your review of the company.
+    if (facts.campaignType === 'ugc' && facts.prospect.reviewStatus === 'pending') {
+      run(db, "UPDATE prospects SET review_status = 'approved', reviewed_at = ?, review_note = COALESCE(review_note, 'Approved with its UGC pitch'), updated_at = ? WHERE id = ?", nowIso(), nowIso(), p.prospect_id)
+      logActivity(db, 'prospect.reviewed', 'Approved for UGC outreach together with its pitch', { prospectId: p.prospect_id })
+      if (['qualified', 'discovered', 'researching'].includes(getProspect(db, p.prospect_id).stage)) setStage(db, p.prospect_id, 'draft_ready', 'UGC pitch approved')
+    }
     if (p.channel === 'email') {
       if (getProspect(db, p.prospect_id).stage === 'draft_ready') setStage(db, p.prospect_id, 'awaiting_approval', 'Pitch approved; waiting for you to send it manually')
     } else {
@@ -219,7 +234,8 @@ export function pitchView(db: DB, dataDir: string, pitchId: number) {
   const { facts, checks, wordCount, claims } = evaluatePitch(db, p)
   return {
     pitch: { ...p, options: JSON.parse(p.options) as PitchOptions, claims: JSON.parse(p.claims) as Claim[], flags: JSON.parse(p.flags) },
-    company: { id: facts.prospect.id, name: facts.prospect.name, domain: facts.prospect.domain, category: facts.prospect.categoryName, fitScore: facts.prospect.fitScore, reviewStatus: facts.prospect.reviewStatus },
+    company: { id: facts.prospect.id, name: facts.prospect.name, domain: facts.prospect.domain, category: facts.prospect.categoryName, fitScore: facts.prospect.fitScore, reviewStatus: facts.prospect.reviewStatus, campaignType: facts.campaignType },
+    ugc: facts.ugc,
     program: facts.program,
     recipient: facts.contact ? {
       id: facts.contact.id, email: facts.contact.email, role: facts.contact.role, verification_status: facts.contact.verification_status,

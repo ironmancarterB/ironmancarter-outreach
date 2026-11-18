@@ -1,9 +1,10 @@
-// Background worker: research batches, and the autopilot scheduler. Autopilot only sends when you switched it on in
+// Background worker: research batches, the autopilot scheduler and the daily UGC research/drafting run. Autopilot only sends when you switched it on in
 // Outreach Controls, and only through the same checks as a manual send. Safe to stop at any time: interrupted
 // research resumes on the next start, and a send interrupted mid-flight is marked uncertain and never retried.
 import { openDb } from '../../../packages/db'
 import { runWorker } from '../../../packages/research/worker'
 import { runAutopilot } from '../../../packages/outreach/autopilot'
+import { runUgcDaily } from '../../../packages/ugc/daily'
 import { recoverInterruptedSends } from '../../../packages/outreach/send'
 import { GoogleApi } from '../../../packages/gmail/google'
 import { defaultSecretStore } from '../../../packages/gmail/secrets'
@@ -24,6 +25,8 @@ recoverInterruptedSends(db)
 await Promise.all([
   runWorker(db, { signal: controller.signal, log }),
   runAutopilot(db, gmail, { dataDir: config.dataDir, signal: controller.signal, log }),
+  // UGC: daily research and review drafts only. UGC emails are never sent without your approval.
+  runUgcDaily(db, gmail, { dataDir: config.dataDir, signal: controller.signal, log }),
 ])
 db.close()
 process.exit(0)

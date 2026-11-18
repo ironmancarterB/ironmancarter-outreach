@@ -76,11 +76,15 @@ export function recoverInterrupted(db: DB) {
 
 interface LoadedKit { kit: MediaKit; data: Buffer; sha: string }
 
-function loadDefaultKit(db: DB, dataDir: string, expectedKitId: number | null): LoadedKit {
-  const kit = getDefaultMediaKit(db)
-  if (!kit) throw new AppError(409, 'no_media_kit', 'There is no default media kit to attach.')
+// Sponsorship pitches always carry the default media kit. UGC pitches carry the default UGC rate card / portfolio
+// PDF only when the pitch was written with one (kitId set); otherwise they go without an attachment.
+function loadDefaultKit(db: DB, dataDir: string, expectedKitId: number | null, campaign: 'sponsorship' | 'ugc' = 'sponsorship'): LoadedKit | null {
+  if (campaign === 'ugc' && expectedKitId == null) return null
+  const kit = getDefaultMediaKit(db, campaign)
+  const what = campaign === 'ugc' ? 'UGC rate card' : 'media kit'
+  if (!kit) throw new AppError(409, 'no_media_kit', `There is no default ${what} to attach.`)
   if (expectedKitId != null && kit.id !== expectedKitId) {
-    throw new AppError(409, 'media_kit_changed', `This pitch was written for media kit #${expectedKitId}, but the default is now v${kit.version}. Regenerate the pitch first.`)
+    throw new AppError(409, 'media_kit_changed', `This pitch was written for ${what} #${expectedKitId}, but the default is now v${kit.version}. Regenerate the pitch first.`)
   }
   const path = mediaKitFilePath(dataDir, kit)
   if (!existsSync(path)) throw new AppError(409, 'media_kit_missing', `The media kit file ${kit.stored_filename} is missing.`)
@@ -145,7 +149,7 @@ export async function verifyDraft(db: DB, deps: GmailDeps, rowId: number, expect
     { label: 'Sender', ok: (parsed.headers.from ?? '').toLowerCase().includes(account.email), detail: parsed.headers.from ?? 'missing' },
     row.attachment_sha256
       ? { label: 'Exactly one attachment', ok: pdfs.length === 1, detail: `${pdfs.length} found` }
-      : { label: 'No attachment (follow-up)', ok: pdfs.length === 0, detail: `${pdfs.length} found` },
+      : { label: 'No attachment', ok: pdfs.length === 0, detail: `${pdfs.length} found` },
   ]
   if (expectedBody !== undefined) checks.push({ label: 'Body matches what the app wrote', ok: !!text && norm(text.data.toString('utf8')) === norm(expectedBody), detail: text ? `${text.data.length} bytes` : 'no text part' })
   if (pdf) {
@@ -180,6 +184,7 @@ export interface CreateInput {
   subject: string
   body: string                      // final text, including the compliance footer
   kitId: number | null
+  campaign?: 'sponsorship' | 'ugc'  // which default attachment applies (default sponsorship)
   attachKit?: boolean               // default true; follow-ups go without the attachment
   threadId?: string | null          // reply in an existing Gmail thread (follow-ups)
   headers?: Record<string, string>  // In-Reply-To / References for follow-ups
@@ -187,7 +192,7 @@ export interface CreateInput {
 
 export async function createDraft(db: DB, deps: GmailDeps, dataDir: string, input: CreateInput) {
   const { account, token } = await accessToken(db, deps)
-  const kit = input.attachKit === false ? null : loadDefaultKit(db, dataDir, input.kitId)
+  const kit = input.attachKit === false ? null : loadDefaultKit(db, dataDir, input.kitId, input.campaign)
   const ref = randomUUID()
   const raw = buildRaw(db, account, { to: input.to, subject: input.subject, body: input.body, ref, headers: input.headers }, kit)
   if (raw.length > 30 * 1024 * 1024) throw new AppError(409, 'too_large', 'The message with its attachment is larger than Gmail accepts.')
@@ -259,10 +264,17 @@ function recordThread(db: DB, row: DraftRow) {
 }
 
 // Everything that must be true before an approved pitch may become a Gmail draft.
+const campaignOf = (db: DB, prospectId: number) =>
+  (get<{ campaign_type: 'sponsorship' | 'ugc' }>(db, 'SELECT campaign_type FROM prospects WHERE id = ?', prospectId)?.campaign_type ?? 'sponsorship')
+
+// UGC pitches become Gmail drafts for your review before you approve them (research → draft in Gmail → your
+// approval → the separate send confirmation). Sponsorship pitches are approved first. Either way, nothing is
+// sent until an approved pitch passes every send check and you confirm the exact message.
 function pitchPreconditions(db: DB, pitchId: number) {
   const p = getPitch(db, pitchId)
   if (p.channel !== 'email') throw new AppError(409, 'not_email', 'Manual submissions are made on the brand\'s site, not by email.')
-  if (p.status !== 'approved') throw new AppError(409, 'not_approved', 'Only approved pitches can become Gmail drafts. Approve it first.')
+  const ugcReview = p.status === 'draft' && campaignOf(db, p.prospect_id) === 'ugc'
+  if (p.status !== 'approved' && !ugcReview) throw new AppError(409, 'not_approved', 'Only approved pitches can become Gmail drafts. Approve it first.')
   const { checks } = evaluatePitch(db, p)
   const blockers = checks.filter((c) => c.level === 'blocker')
   if (blockers.length) throw new AppError(409, 'blocked', `Fix these first: ${blockers.map((b) => b.message).join(' ')}`, blockers)
@@ -279,7 +291,7 @@ export async function createPitchDraft(db: DB, deps: GmailDeps, dataDir: string,
       ? 'An earlier attempt for this company has an uncertain result. Use "Check Gmail" first.'
       : 'This company already has a Gmail draft. Use "Update Gmail draft" instead.')
   }
-  return createDraft(db, deps, dataDir, { kind: 'pitch', pitchId: p.id, prospectId: p.prospect_id, to: p.recipient_email!, subject: p.subject!, body: composeBody(db, 'pitch', p.body), kitId: p.media_kit_id })
+  return createDraft(db, deps, dataDir, { kind: 'pitch', pitchId: p.id, prospectId: p.prospect_id, to: p.recipient_email!, subject: p.subject!, body: composeBody(db, 'pitch', p.body), kitId: p.media_kit_id, campaign: campaignOf(db, p.prospect_id) })
 }
 
 // A draft addressed to your own Gmail account, to test the connection and attachment without touching any prospect.
@@ -308,7 +320,7 @@ export async function updatePitchDraft(db: DB, deps: GmailDeps, dataDir: string,
     throw new AppError(409, 'edited_in_gmail', 'This draft was changed in Gmail. Updating it replaces those changes with the approved pitch.')
   }
   const { account, token } = await accessToken(db, deps)
-  const kit = loadDefaultKit(db, dataDir, p.media_kit_id)
+  const kit = loadDefaultKit(db, dataDir, p.media_kit_id, campaignOf(db, p.prospect_id))
   const fullBody = composeBody(db, 'pitch', p.body)
   const raw = buildRaw(db, account, { to: p.recipient_email!, subject: p.subject!, body: fullBody, ref: row.local_ref }, kit)
   const op = opStart(db, 'update_draft', account.id, row.id, `pitch v${p.version}`)
@@ -327,7 +339,7 @@ export async function updatePitchDraft(db: DB, deps: GmailDeps, dataDir: string,
   tx(db, () => {
     run(db, `UPDATE gmail_drafts SET pitch_id = ?, recipient = ?, subject = ?, content_sha256 = ?, media_kit_id = ?, attachment_filename = ?, attachment_sha256 = ?,
       gmail_message_id = ?, gmail_thread_id = ?, edited_in_gmail = 0, attachment_check = NULL, attachment_verified_at = NULL, sync_note = NULL, last_synced_at = ?, updated_at = ? WHERE id = ?`,
-      p.id, p.recipient_email, p.subject, contentHash(p.recipient_email!, p.subject!, fullBody, kit.sha), kit.kit.id, kit.kit.original_filename, kit.sha,
+      p.id, p.recipient_email, p.subject, contentHash(p.recipient_email!, p.subject!, fullBody, kit?.sha ?? null), kit?.kit.id ?? null, kit?.kit.original_filename ?? null, kit?.sha ?? null,
       draft.message.id, draft.message.threadId, nowIso(), nowIso(), row.id)
     opFinish(db, op, 'ok', `message ${draft.message.id}`)
     recordThread(db, getDraftRow(db, row.id))
@@ -457,10 +469,13 @@ export function gmailForPitch(db: DB, dataDir: string, pitchId: number) {
   const row = liveForCompany(db, p.prospect_id)
     ?? get<DraftRow>(db, "SELECT * FROM gmail_drafts WHERE pitch_id = ? ORDER BY id DESC LIMIT 1", pitchId)
   let currentHash: string | null = null
-  const kit = getDefaultMediaKit(db)
+  const campaign = campaignOf(db, p.prospect_id)
+  const kit = campaign === 'ugc' && p.media_kit_id == null ? null : getDefaultMediaKit(db, campaign)
   if (p.recipient_email && p.subject && kit) {
     const path = mediaKitFilePath(dataDir, kit)
     currentHash = existsSync(path) ? contentHash(p.recipient_email, p.subject, composeBody(db, 'pitch', p.body), kit.sha256) : null
+  } else if (p.recipient_email && p.subject && campaign === 'ugc') {
+    currentHash = contentHash(p.recipient_email, p.subject, composeBody(db, 'pitch', p.body), null)
   }
   return {
     connected: account?.status === 'connected',

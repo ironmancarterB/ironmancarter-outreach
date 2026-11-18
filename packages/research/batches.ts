@@ -6,18 +6,21 @@ import { normalizeDomain, normalizeUrl } from '../core/normalize'
 
 export const BATCH_SIZES = [20, 50, 100, 200, 500] as const
 export type BatchSize = (typeof BATCH_SIZES)[number]
+// UGC batches take any size up to this (10, 25, 50 and 100 are offered; custom sizes are allowed).
+export const MAX_UGC_BATCH = 200
+export type CampaignType = 'sponsorship' | 'ugc'
 // A batch's size is how many brands with qualifying emails you want. Research keeps going until it has them,
 // the pool runs out, or it has tried this many times the target.
 export const MAX_RESEARCH_MULTIPLIER = 4
 
 const AVAILABLE = `cp.status = 'available' AND NOT EXISTS (SELECT 1 FROM prospects p WHERE p.domain = cp.domain)`
 
-export function poolSummary(db: DB) {
-  return all<{ id: number; name: string; enabled: number; priority: number; research_quota: number; available: number; total: number }>(db, `
-    SELECT c.id, c.name, c.enabled, c.priority, c.research_quota,
+export function poolSummary(db: DB, campaign?: CampaignType) {
+  return all<{ id: number; name: string; enabled: number; priority: number; research_quota: number; available: number; total: number; campaign_type: CampaignType }>(db, `
+    SELECT c.id, c.name, c.enabled, c.priority, c.research_quota, c.campaign_type,
       (SELECT count(*) FROM candidate_pool cp WHERE cp.category_id = c.id AND ${AVAILABLE}) AS available,
       (SELECT count(*) FROM candidate_pool cp WHERE cp.category_id = c.id) AS total
-    FROM categories c ORDER BY c.priority, c.sort_order`)
+    FROM categories c ${campaign ? 'WHERE c.campaign_type = ?' : ''} ORDER BY c.priority, c.sort_order`, ...(campaign ? [campaign] : []))
 }
 
 export function listPool(db: DB, filters: { category_id?: number; status?: string } = {}) {
@@ -121,13 +124,16 @@ export function topUpBatch(db: DB, batchId: number): number {
 }
 
 // Never pads the batch: if there are fewer candidates than requested, the shortfall is recorded.
-export function createBatch(db: DB, input: { size: number; categoryIds?: number[] }) {
-  if (!BATCH_SIZES.includes(input.size as BatchSize)) throw invalid(`Batch size must be one of ${BATCH_SIZES.join(', ')}`)
+export function createBatch(db: DB, input: { size: number; categoryIds?: number[]; campaign?: CampaignType; origin?: 'manual' | 'autopilot' | 'daily' }) {
+  const campaign = input.campaign ?? 'sponsorship'
+  if (campaign === 'sponsorship' && !BATCH_SIZES.includes(input.size as BatchSize)) throw invalid(`Batch size must be one of ${BATCH_SIZES.join(', ')}`)
+  if (campaign === 'ugc' && (!Number.isInteger(input.size) || input.size < 1 || input.size > MAX_UGC_BATCH)) throw invalid(`UGC batch size must be 1 to ${MAX_UGC_BATCH}`)
   if (get(db, "SELECT 1 FROM research_batches WHERE status IN ('queued', 'running')")) throw new AppError(409, 'busy', 'A research batch is already running. Wait for it or cancel it.')
+  // A batch researches one campaign's categories only.
   const cats = all<Cat>(db,
-    'SELECT id, name, priority, research_quota FROM categories WHERE enabled = 1 ORDER BY priority, sort_order')
+    'SELECT id, name, priority, research_quota FROM categories WHERE enabled = 1 AND campaign_type = ? ORDER BY priority, sort_order', campaign)
     .filter((c) => !input.categoryIds?.length || input.categoryIds.includes(c.id))
-  if (!cats.length) throw invalid('No enabled categories selected')
+  if (!cats.length) throw invalid(`No enabled ${campaign === 'ugc' ? 'UGC ' : ''}categories selected`)
 
   const picks = pickCandidates(db, cats, input.size)
   const perCategory = cats.map((c) => `${c.name}: ${picks.filter((p) => p.category_id === c.id).length}`)
@@ -138,10 +144,10 @@ export function createBatch(db: DB, input: { size: number; categoryIds?: number[
 
   return tx(db, () => {
     const now = nowIso()
-    const batchId = run(db, `INSERT INTO research_batches (requested_size, category_ids, status, shortfall_note, ai_provider, created_at) VALUES (?, ?, 'queued', ?, ?, ?)`,
-      input.size, JSON.stringify(cats.map((c) => c.id)), shortfall, getSetting<string>(db, 'ai.provider'), now).lastId
+    const batchId = run(db, `INSERT INTO research_batches (requested_size, category_ids, status, shortfall_note, ai_provider, created_at, campaign_type, origin) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)`,
+      input.size, JSON.stringify(cats.map((c) => c.id)), shortfall, getSetting<string>(db, 'ai.provider'), now, campaign, input.origin ?? 'manual').lastId
     enqueue(db, batchId, picks, now)
-    logActivity(db, 'research.batch_created', `Queued research batch #${batchId}: ${picks.length} brands${shortfall ? ` (requested ${input.size})` : ''}`)
+    logActivity(db, 'research.batch_created', `Queued ${campaign === 'ugc' ? 'UGC ' : ''}research batch #${batchId}: ${picks.length} brands${shortfall ? ` (requested ${input.size})` : ''}`)
     return getBatch(db, batchId)
   })
 }
@@ -159,6 +165,8 @@ export interface BatchRow {
   id: number
   requested_size: number
   category_ids: string
+  campaign_type: CampaignType
+  origin: string
   status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
   shortfall_note: string | null
   ai_provider: string
@@ -193,7 +201,7 @@ export interface BatchCandidateRow {
   review_status: string | null
 }
 
-export const listBatches = (db: DB) => all<BatchRow>(db, `SELECT b.*, ${COUNTS} FROM research_batches b ORDER BY b.id DESC LIMIT 50`)
+export const listBatches = (db: DB, campaign?: CampaignType) => all<BatchRow>(db, `SELECT b.*, ${COUNTS} FROM research_batches b ${campaign ? 'WHERE b.campaign_type = ?' : ''} ORDER BY b.id DESC LIMIT 50`, ...(campaign ? [campaign] : []))
 
 export function getBatch(db: DB, id: number) {
   const batch = get<BatchRow>(db, `SELECT b.*, ${COUNTS} FROM research_batches b WHERE b.id = ?`, id)

@@ -9,6 +9,7 @@ import { MAX_RESEARCH_MULTIPLIER, topUpBatch } from './batches'
 import { checkDueMailDomains, ensureMailDomains, type MailLookup } from './mailDomain'
 import { contactQualification, departmentOf } from '../crm/leads'
 import type { Contact } from '../crm/prospects'
+import { scoreFit, type FitBreakdown } from '../core/scoring'
 
 export const MAX_ATTEMPTS = 3
 
@@ -102,8 +103,12 @@ export async function processOne(db: DB, deps: { fetcher: Fetcher; ai?: RouterDe
   try {
     result = await researchCandidate(db, cand, deps)
     if (result.status === 'done' && result.prospectId) {
-      const q = await qualifyResearched(db, result.prospectId, deps)
+      const pid = result.prospectId
+      const q = await qualifyResearched(db, pid, deps)
       result = { ...result, qualified: q.qualified, exclusionReason: q.exclusionReason, message: q.qualified ? `${result.message}. Qualifying email: ${q.email}` : `${result.message}. Excluded: ${q.exclusionReason}` }
+      // UGC leads also need a minimum lead score: the daily target is never met with weak leads.
+      const ugc = applyUgcMinimum(db, pid, q.qualified)
+      if (ugc) result = { ...result, qualified: false, exclusionReason: ugc, message: `${result.message}. Not counted: ${ugc}` }
     }
   } catch (err) {
     result = { status: 'failed', message: `Unexpected error: ${(err as Error).message}` }
@@ -142,4 +147,22 @@ export async function runWorker(db: DB, opts: WorkerOptions = {}) {
   const lanes = Math.min(5, Math.max(1, getSetting<number>(db, 'research.concurrency')))
   log(`Research worker running with ${lanes} lane(s)`)
   await Promise.all(Array.from({ length: lanes }, lane))
+}
+
+// For a UGC lead with a qualifying email: credit the contact found by the deeper contact research (the first score
+// was computed before it ran), then apply the minimum lead score. Returns why the lead does not count, or null.
+export function applyUgcMinimum(db: DB, prospectId: number, qualified: boolean): string | null {
+  const p = get<{ campaign_type: string; fit_score: number | null; fit_breakdown: string | null; fit_explanation: string | null }>(db,
+    'SELECT campaign_type, fit_score, fit_breakdown, fit_explanation FROM prospects WHERE id = ?', prospectId)
+  if (!p || p.campaign_type !== 'ugc' || !qualified) return null
+  const breakdown = JSON.parse(p.fit_breakdown ?? '{}') as FitBreakdown
+  if (!breakdown.contact) {
+    breakdown.contact = 8
+    const score = scoreFit(breakdown)
+    run(db, 'UPDATE prospects SET fit_breakdown = ?, fit_score = ?, fit_explanation = ?, updated_at = ? WHERE id = ?', JSON.stringify(breakdown), score,
+      `${(p.fit_explanation ?? '').replace(/ No published business email found yet\.| Contact form only\./, '')} Business email found by contact research.`.trim(), nowIso(), prospectId)
+    p.fit_score = score
+  }
+  const min = getSetting<{ minScore: number }>(db, 'ugc.research').minScore
+  return (p.fit_score ?? 0) < min ? `UGC lead score ${p.fit_score ?? 0} is below your minimum of ${min}` : null
 }

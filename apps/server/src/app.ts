@@ -40,6 +40,7 @@ import { GoogleApi } from '../../../packages/gmail/google'
 import { defaultSecretStore, memoryStore } from '../../../packages/gmail/secrets'
 import { config } from './config'
 import { afterCrmChange, outreachRoutes } from './outreachRoutes'
+import { ugcRoutes } from './ugcRoutes'
 import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 import { contactStatus, getRun, queueContactResearch } from '../../../packages/research/contacts'
 import { addManualContact, contactDiscovery, contactFindings, reviewContact } from '../../../packages/research/contactReview'
@@ -149,7 +150,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     for (const [k, v] of clean) setSetting(db, k, v)
     if (clean.length) logActivity(db, 'settings.updated', `Updated settings: ${clean.map(([k]) => k).join(', ')}`)
     // A new signature (or postal address) is applied to every unsent draft right away. Nothing is sent.
-    const signatureRefresh = clean.some(([k]) => k === 'business.signature') ? await refreshSignatures(db, gmail, dataDir) : undefined
+    const signatureRefresh = clean.some(([k]) => k === 'business.signature' || k === 'business.postalAddress') ? await refreshSignatures(db, gmail, dataDir) : undefined
     return { values: allSettings(db), signatureRefresh }
   })
 
@@ -187,6 +188,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       tier: (['A', 'B', 'C'] as const).find((t) => t === q.tier),
       review: (['pending', 'approved', 'rejected'] as const).find((r) => r === q.review),
       source: (['manual', 'csv', 'research'] as const).find((s) => s === q.source),
+      campaign: (['sponsorship', 'ugc'] as const).find((c) => c === q.campaign),
       sort: (['updated', 'created', 'name', 'score', 'value'] as const).find((s) => s === q.sort),
       dir: q.dir === 'asc' ? 'asc' : 'desc',
     }
@@ -359,8 +361,8 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   })
   app.get('/api/research/pool', async (req) => {
     const q = req.query as Record<string, string | undefined>
-    if (q.summary === '1') return { summary: poolSummary(db), entries: [] }
-    return { summary: poolSummary(db), entries: listPool(db, { category_id: q.category_id ? id(q.category_id) : undefined, status: q.status || undefined }) }
+    if (q.summary === '1') return { summary: poolSummary(db, 'sponsorship'), entries: [] }
+    return { summary: poolSummary(db, 'sponsorship'), entries: listPool(db, { category_id: q.category_id ? id(q.category_id) : undefined, status: q.status || undefined }) }
   })
   app.post('/api/research/pool', async (req, reply) => {
     const b = (req.body ?? {}) as Body
@@ -420,6 +422,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       label: fields.label?.value,
       notes: fields.notes?.value || null,
       makeDefault: fields.makeDefault?.value === 'true',
+      kind: fields.kind?.value === 'ugc' ? 'ugc' : 'sponsorship',
     })
     return reply.code(result.duplicate ? 200 : 201).send(result)
   })
@@ -526,6 +529,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   })
 
   outreachRoutes(app, { db, gmail, dataDir, aiDeps: opts.aiDeps })
+  ugcRoutes(app, { db, gmail, dataDir, fetchImpl: opts.fetchImpl })
 
   // ---------- Contact discovery (runs are processed by the research worker) ----------
   app.get('/api/contact-discovery', async () => contactDiscovery(db))

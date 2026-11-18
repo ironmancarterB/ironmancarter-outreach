@@ -151,7 +151,7 @@ export function roleOfLocal(local: string): EmailClass {
 const ROLE_RANKS: [RegExp, number, string][] = [
   [/^(partnerships?|partners?|sponsorships?|sponsors?|brandpartnerships?|collabs?|collaborations?)$/, 1, 'Partnerships'],
   [/^(influencers?|creators?|creatorpartnerships|affiliates?|affiliate-?program|ambassadors?|talent|streamers?|esports|gaming)$/, 2, 'Creator / affiliate program'],
-  [/^(marketing|brand|brands|pr|press|media|social|community|advertising|ads|events|deals|clients|newbusiness)$/, 3, 'Marketing / press'],
+  [/^(marketing|brand|brands|pr|press|media|social|community|advertising|ads|events|deals|clients|newbusiness|creative|growth|content|ugc|video|studio)$/, 3, 'Marketing / press'],
   [/^(business|bd|bizdev|sales|hello|contact|info|team|inquiries|enquiries|general)$/, 4, 'General business'],
 ]
 

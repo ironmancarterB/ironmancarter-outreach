@@ -11,7 +11,7 @@ const wordsIn = (body: string) => body.split(/\n(?:Best|Thanks|Cheers|Talk soon)
 
 export default function PitchEditor({ id }: { id: number }) {
   const toast = useToast()
-  const { data, error, setData } = useApi<PitchView>(`/api/pitches/${id}`)
+  const { data, error, setData, reload } = useApi<PitchView>(`/api/pitches/${id}`)
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -59,7 +59,7 @@ export default function PitchEditor({ id }: { id: number }) {
         <h1 className="text-2xl font-semibold tracking-tight">{data.company.name}</h1>
         <StatusBadge status={p.status} />
         <Badge>{p.channel === 'email' ? 'Email pitch' : 'Manual submission'}</Badge>
-        <Badge tone={PROGRAM_TONE[data.program.type]}>{data.program.label}</Badge>
+        {data.company.campaignType === 'ugc' ? <Badge tone="violet">UGC pitch</Badge> : <Badge tone={PROGRAM_TONE[data.program.type]}>{data.program.label}</Badge>}
         {data.versions.length > 1 && (
           <Select className="ml-auto w-auto" value={p.id} onChange={(e) => navigate(`/drafts/pitch/${e.target.value}`)} aria-label="Version">
             {data.versions.map((v) => <option key={v.id} value={v.id}>v{v.version} · {v.channel === 'email' ? 'email' : 'manual'} · {v.status}</option>)}
@@ -72,6 +72,8 @@ export default function PitchEditor({ id }: { id: number }) {
       {p.status === 'approved' && <Notice tone="green" title={`Approved ${p.reviewed_at ? relative(p.reviewed_at) : ''}`}>
         {p.channel === 'email' ? 'You can now create a Gmail draft of it in the Gmail draft panel. Approval is not permission to send: each email is sent only after you review and confirm it in the send dialog.' : 'Ready for you to submit on the brand\'s site (Manual submissions tab).'}
       </Notice>}
+
+      {data.ugc && <UgcPanel view={data} onSaved={reload} />}
 
       <div className="grid gap-5 xl:grid-cols-[1fr_26rem]">
         <div className="space-y-5">
@@ -310,6 +312,49 @@ function Strategy({ view, onRegenerated }: { view: PitchView; onRegenerated: (v:
         </Field>
         <Button variant="primary" className="w-full" onClick={regenerate} disabled={busy || p.status === 'superseded'}>{busy ? 'Regenerating…' : 'Regenerate with these options'}</Button>
         <p className="text-xs text-zinc-500">Uses the provider selected in Settings → AI & costs (mock = template, Ollama = local AI). Never a paid provider.</p>
+      </div>
+    </Card>
+  )
+}
+
+// UGC: the researched video concepts and the portfolio link this pitch relies on. Editing concepts does not change
+// the pitch until you regenerate it.
+function UgcPanel({ view, onSaved }: { view: PitchView; onSaved: () => void }) {
+  const toast = useToast()
+  const u = view.ugc!
+  const [editing, setEditing] = useState(false)
+  const [concepts, setConcepts] = useState(u.concepts.map((c) => ({ ...c })))
+  const save = async () => {
+    try {
+      await api.patch(`/api/ugc/prospects/${view.company.id}/concepts`, { concepts })
+      toast('Concepts saved. Regenerate the pitch to use them.')
+      setEditing(false)
+      onSaved()
+    } catch (e) { toast((e as Error).message, 'error') }
+  }
+  return (
+    <Card title="UGC video concepts and portfolio">
+      <div className="space-y-3 text-sm">
+        <p>Portfolio link: {u.portfolio.usable ? <><Badge tone="green">Live</Badge> <a className="text-brand-600 underline" href={u.portfolio.link!} target="_blank" rel="noreferrer">{u.portfolio.link}</a></> : <><Badge tone="amber">Not verified</Badge> {u.portfolio.reason} <a className="text-brand-600 underline" href="#/ugc/overview">Set it on the UGC page</a></>}</p>
+        {u.signals.length > 0 && <p className="text-zinc-500">Research found: {u.signals.map((s) => s.label).join(' · ')}</p>}
+        {editing ? (
+          <div className="space-y-3">
+            {concepts.map((c, i) => (
+              <div key={i} className="grid gap-2">
+                <Input value={c.title} onChange={(e) => setConcepts(concepts.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} aria-label={`Concept ${i + 1} title`} />
+                <Textarea value={c.outline} onChange={(e) => setConcepts(concepts.map((x, j) => (j === i ? { ...x, outline: e.target.value } : x)))} aria-label={`Concept ${i + 1} outline`} />
+              </div>
+            ))}
+            <div className="flex justify-end gap-2"><Button onClick={() => setEditing(false)}>Cancel</Button><Button variant="primary" onClick={save}>Save concepts</Button></div>
+          </div>
+        ) : (
+          <>
+            <ul className="space-y-2">
+              {u.concepts.map((c) => <li key={c.title}><b>{c.title}:</b> {c.outline}<div className="text-xs text-zinc-500">Based on: {c.basis}</div></li>)}
+            </ul>
+            <div className="flex justify-end"><Button size="sm" onClick={() => setEditing(true)}>Edit concepts</Button></div>
+          </>
+        )}
       </div>
     </Card>
   )

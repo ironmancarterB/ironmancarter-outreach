@@ -6,7 +6,7 @@ describe('database foundation', () => {
   it('applies migrations once and is idempotent', () => {
     const db = freshDb()
     expect(migrate(db)).toEqual([])
-    expect(all<{ version: number }>(db, 'SELECT version FROM schema_migrations ORDER BY version')).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }])
+    expect(all<{ version: number }>(db, 'SELECT version FROM schema_migrations ORDER BY version')).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }])
   })
 
   it('seeds safe defaults: no sending, no paid AI, $0 budget', () => {
@@ -28,9 +28,10 @@ describe('database foundation', () => {
     expect(blob.toLowerCase()).not.toContain('caerter')
   })
 
-  it('seeds eight categories and four sending tiers', () => {
+  it('seeds eight sponsorship and eight UGC categories and four sending tiers', () => {
     const db = freshDb()
-    expect(all(db, 'SELECT * FROM categories')).toHaveLength(8)
+    expect(all(db, "SELECT * FROM categories WHERE campaign_type = 'sponsorship'")).toHaveLength(8)
+    expect(all(db, "SELECT * FROM categories WHERE campaign_type = 'ugc'")).toHaveLength(8)
     expect(all<{ slug: string; daily_limit: number; weekly_limit: number }>(db, 'SELECT slug, daily_limit, weekly_limit FROM sending_tiers ORDER BY sort_order'))
       .toEqual([
         { slug: 'testing', daily_limit: 5, weekly_limit: 25 },
