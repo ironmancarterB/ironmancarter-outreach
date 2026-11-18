@@ -37,6 +37,18 @@ npm start
 
 Then open **http://localhost:5181**.
 
+## Running in the background (login agent)
+
+A macOS login agent (`~/Library/LaunchAgents/com.ironmancarter.outreach.plist`) starts the app at login through
+`scripts/run-app.sh` (same as `npm run dev`) and restarts it if it stops. Logs: `data/app.log`. The Mac must be awake for
+autopilot to send. Commands:
+
+- Stop: `launchctl bootout gui/$(id -u)/com.ironmancarter.outreach`
+- Start again: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ironmancarter.outreach.plist`
+- Restart now: `launchctl kickstart -k gui/$(id -u)/com.ironmancarter.outreach`
+
+Do not also run `npm run dev` while the agent is loaded (port 5180 would be taken twice).
+
 ## Other commands
 
 | Command | What it does |
