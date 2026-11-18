@@ -17,6 +17,14 @@
         "/Users/cartercoates/Projects/ironmancarter-site/scripts/dev-server.mjs"
       ],
       "port": 5190
+    },
+    {
+      "name": "carter-outreach-site",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/cartercoates/Projects/carter-outreach-site/scripts/preview.mjs"
+      ],
+      "port": 5191
     }
   ]
 }

@@ -201,7 +201,9 @@ export async function createDraft(db: DB, deps: GmailDeps, dataDir: string, inpu
     if (input.pitchId && get(db, `SELECT 1 FROM gmail_drafts WHERE pitch_id = ? AND status IN ${LIVE}`, input.pitchId)) {
       throw new AppError(409, 'duplicate', 'A Gmail draft already exists for this pitch.')
     }
-    if (input.prospectId && liveForCompany(db, input.prospectId)) throw new AppError(409, 'duplicate', 'This company already has a Gmail draft. Update it instead of creating another.')
+    // One unsent first-email draft per company. Follow-ups are separate drafts (one per follow-up, checked below),
+    // so a leftover pitch draft never blocks them.
+    if (input.kind === 'pitch' && input.prospectId && liveForCompany(db, input.prospectId)) throw new AppError(409, 'duplicate', 'This company already has a Gmail draft. Update it instead of creating another.')
     if (input.followUpId && get(db, `SELECT 1 FROM gmail_drafts WHERE follow_up_id = ? AND status IN ${LIVE}`, input.followUpId)) {
       throw new AppError(409, 'duplicate', 'This follow-up already has a Gmail draft.')
     }

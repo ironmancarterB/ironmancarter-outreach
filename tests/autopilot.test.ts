@@ -216,6 +216,17 @@ describe('follow-ups', () => {
     expect(get(db, 'SELECT status FROM follow_ups WHERE sequence = 1')).toEqual({ status: 'sent' })
   })
 
+  it('a leftover unsent pitch draft in Gmail never blocks the follow-up, and still blocks a second first email', async () => {
+    const l = await firstEmail()
+    const acct = get<{ id: number }>(db, 'SELECT id FROM mail_accounts')!.id
+    run(db, `INSERT INTO gmail_drafts (kind, prospect_id, account_id, status, local_ref, rfc822_message_id, gmail_draft_id, recipient, subject, content_sha256, created_at, updated_at)
+      VALUES ('pitch', 1, ?, 'created', 'leftover', '<x@y>', 'r-leftover', ?, 'Old copy', 'x', ?, ?)`, acct, l.email, new Date().toISOString(), new Date().toISOString())
+    await run1()
+    expect(sends().map((s) => s.kind)).toEqual(['initial', 'follow_up'])
+    const { createDraft } = await import('../packages/gmail/drafts')
+    await expect(createDraft(db, gmail, dir, { kind: 'pitch', pitchId: null, prospectId: 1, to: l.email, subject: 's', body: 'b', kitId: null })).rejects.toThrow(/already has a Gmail draft/)
+  })
+
   it('stops when the brand replies', async () => {
     const l = await firstEmail()
     const thread = get<{ gmail_thread_id: string }>(db, 'SELECT gmail_thread_id FROM send_attempts')!.gmail_thread_id
