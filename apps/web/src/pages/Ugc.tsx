@@ -5,7 +5,7 @@ import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Loading, Modal, Not
 import { api, useApi, usePoll } from '../lib/api'
 import { dateTime, num, usd } from '../lib/format'
 
-type Tab = 'overview' | 'pipeline' | 'deals' | 'templates' | 'settings'
+type Tab = 'overview' | 'autopilot' | 'pipeline' | 'deals' | 'templates' | 'settings'
 
 interface Overview {
   totals: Record<'prospects' | 'verifiedContacts' | 'draftsAwaitingApproval' | 'emailsSent' | 'replies' | 'interested' | 'negotiating' | 'booked' | 'recurringClients' | 'revenueBookedCents' | 'revenueCollectedCents', number>
@@ -17,6 +17,7 @@ interface Overview {
   costs: { estimatedUsd: number; alertUsd: number; flags: string[]; lines: { item: string; detail: string; usd: number }[] }
 }
 interface Metrics {
+  discovered: number; sendingErrors: number; interestedNew: number
   period: string; researched: number; qualified: number; verifiedContacts: number; pitchesDrafted: number; gmailDrafts: number; approved: number
   sent: number; followUpsSent: number; failures: number; replies: number; positive: number; meetings: number; closed: number
   revenueBookedCents: number; revenueCollectedCents: number; conversion: Record<string, number | null>
@@ -29,16 +30,17 @@ interface Template { slug: string; kind: string; name: string; subject: string |
 const pct = (v: number | null) => (v == null ? '—' : `${v}%`)
 
 export default function Ugc({ tab }: { tab?: string }) {
-  const fromRoute = (['overview', 'pipeline', 'deals', 'templates', 'settings'] as Tab[]).find((x) => x === tab) ?? 'overview'
+  const fromRoute = (['overview', 'autopilot', 'pipeline', 'deals', 'templates', 'settings'] as Tab[]).find((x) => x === tab) ?? 'overview'
   const [t, setT] = useState<Tab>(fromRoute)
   useEffect(() => setT(fromRoute), [fromRoute])
   const go = (v: Tab) => { setT(v); location.hash = `#/ugc/${v}` }
   return (
     <>
-      <PageHeader title="UGC Clients" subtitle="Find companies that pay for creator-made videos. Research and drafts run here; every UGC email waits for your approval in Outreach." />
-      <Tabs value={t} onChange={go} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'pipeline', label: 'Pipeline' }, { id: 'deals', label: 'Deals' }, { id: 'templates', label: 'Templates' }, { id: 'settings', label: 'Settings' }]} />
+      <PageHeader title="UGC Clients" subtitle="Find companies that pay for creator-made videos. Research runs every business day; UGC autopilot sends within its limits once switched on, and interested brands wait here for you." />
+      <Tabs value={t} onChange={go} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'autopilot', label: 'Autopilot' }, { id: 'pipeline', label: 'Pipeline' }, { id: 'deals', label: 'Deals' }, { id: 'templates', label: 'Templates' }, { id: 'settings', label: 'Settings' }]} />
       <div className="mt-6">
         {t === 'overview' && <OverviewTab />}
+        {t === 'autopilot' && <AutopilotTab />}
         {t === 'pipeline' && <PipelineTab />}
         {t === 'deals' && <DealsTab />}
         {t === 'templates' && <TemplatesTab />}
@@ -86,6 +88,7 @@ function OverviewTab() {
         {!m.data ? <Loading /> : (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-4 lg:grid-cols-7">
+              <Stat label="Companies discovered" value={m.data.discovered} hint="New candidates from Wikidata" />
               <Stat label="Researched" value={m.data.researched} />
               <Stat label="Qualified" value={m.data.qualified} hint={`${pct(m.data.conversion.qualifiedOfResearched)} of researched`} />
               <Stat label="Verified contacts" value={m.data.verifiedContacts} />
@@ -96,6 +99,8 @@ function OverviewTab() {
               <Stat label="Delivery failures" value={m.data.failures} tone={m.data.failures ? 'bad' : 'muted'} />
               <Stat label="Replies" value={m.data.replies} hint={`${pct(m.data.conversion.repliesOfSent)} of sent`} />
               <Stat label="Positive replies" value={m.data.positive} hint={`${pct(m.data.conversion.positiveOfReplies)} of replies`} />
+              <Stat label="Interested brands" value={m.data.interestedNew} tone={m.data.interestedNew ? 'good' : 'muted'} />
+              <Stat label="Sending errors" value={m.data.sendingErrors} tone={m.data.sendingErrors ? 'bad' : 'muted'} />
               <Stat label="Meetings booked" value={m.data.meetings} />
               <Stat label="Projects closed" value={m.data.closed} hint={`${pct(m.data.conversion.closedOfPositive)} of positive`} />
               <Stat label="Revenue booked" value={usd(m.data.revenueBookedCents)} />
@@ -380,10 +385,32 @@ function SettingsTab() {
   const follow = v['ugc.followUps'] as { firstAfterBusinessDays: number; secondAfterBusinessDays: number; max: number }
   const pricing = v['ugc.pricing'] as Record<string, number>
   const costs = v['ugc.costs'] as { dailyAlertUsd: number }
+  const auto = v['ugc.autopilot'] as { newPerDay: number; rampMax: number; maxBouncesPerWeek: number }
   const save = async (key: string, value: unknown) => {
     try { await api.patch('/api/settings', { [key]: value }); toast('Saved', 'ok'); s.reload() } catch (e) { toast((e as Error).message, 'error') }
   }
-  return <UgcSettingsForm research={research} follow={follow} pricing={pricing} costs={costs} save={save} />
+  return (
+    <div className="space-y-6">
+      <AutopilotLimits auto={auto} save={save} />
+      <UgcSettingsForm research={research} follow={follow} pricing={pricing} costs={costs} save={save} />
+    </div>
+  )
+}
+
+function AutopilotLimits({ auto, save }: { auto: { newPerDay: number; rampMax: number; maxBouncesPerWeek: number }; save: (k: string, v: unknown) => void }) {
+  const [a, setA] = useState(auto)
+  const n = (x: string) => Number(x)
+  return (
+    <Card title="UGC autopilot sending limits">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Start at (first emails a day)"><Input type="number" value={a.newPerDay} onChange={(e) => setA({ ...a, newPerDay: n(e.target.value) })} /></Field>
+        <Field label="Grow to at most" hint="One step per clean week; 10 is the hard maximum"><Input type="number" value={a.rampMax} onChange={(e) => setA({ ...a, rampMax: n(e.target.value) })} /></Field>
+        <Field label="Pause after this many bounces in 7 days"><Input type="number" value={a.maxBouncesPerWeek} onChange={(e) => setA({ ...a, maxBouncesPerWeek: n(e.target.value) })} /></Field>
+      </div>
+      <p className="mt-2 text-xs text-zinc-500">The shared account limits (sending tier and daily limits in Outreach Controls) always apply on top, across sponsorship and UGC together, and are never raised automatically.</p>
+      <div className="mt-3 flex justify-end"><Button variant="primary" onClick={() => save('ugc.autopilot', a)}>Save</Button></div>
+    </Card>
+  )
 }
 
 function UgcSettingsForm({ research, follow, pricing, costs, save }: { research: { dailyTarget: number; autoDaily: boolean; minScore: number; autoDraft: boolean }; follow: { firstAfterBusinessDays: number; secondAfterBusinessDays: number; max: number }; pricing: Record<string, number>; costs: { dailyAlertUsd: number }; save: (k: string, v: unknown) => void }) {
@@ -425,6 +452,119 @@ function UgcSettingsForm({ research, follow, pricing, costs, save }: { research:
       <Card title="Cost alert">
         <Field label="Alert when today's estimated cost exceeds ($)"><Input type="number" value={c.dailyAlertUsd} onChange={(e) => setC({ dailyAlertUsd: n(e.target.value) })} /></Field>
         <div className="mt-3 flex justify-end"><Button variant="primary" onClick={() => save('ugc.costs', c)}>Save</Button></div>
+      </Card>
+    </div>
+  )
+}
+
+interface Check { label: string; ok: boolean; detail: string }
+interface AutoStatus {
+  enabled: boolean; cap: number; hardMax: number; phrase: string; sponsorshipEnabled: boolean; inSendWindow: boolean
+  config: { newPerDay: number; rampMax: number; maxBouncesPerWeek: number }
+  pause: { reason: string | null; at: string | null }
+  gate: { ok: boolean; passing: boolean; fresh: boolean; checks: Check[]; checkedAt: string | null }
+  permission: { confirmed: boolean; note: string | null }
+  emergencyStop: { active: boolean }
+  limits: { tier: string; newEmails: { sent: number; limit: number }; weekNew: { sent: number; limit: number }; followUps: { sent: number; limit: number }; total: { sent: number; limit: number } }
+  today: { firstEmails: number; followUps: number }
+  queue: { id: number; company_name: string; email: string | null; fit_score: number | null }[]
+  waiting: { id: number; company_name: string; email: string | null; contact_id: number | null; fit_score: number | null; needs: string[] }[]
+  totals: { sent: number; followUpsSent: number; errors7d: number; bounces7d: number; followUpsPending: number }
+  events: { id: number; kind: string; detail: string; created_at: string }[]
+}
+
+function AutopilotTab() {
+  const st = useApi<AutoStatus>('/api/ugc/autopilot')
+  const toast = useToast()
+  const [phrase, setPhrase] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [picked, setPicked] = useState<Set<number>>(new Set())
+  const [country, setCountry] = useState('US')
+  const [plan, setPlan] = useState<{ note: string; actions: string[] } | null>(null)
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true)
+    try { await fn(); toast(ok); st.reload() } catch (e) { toast((e as Error).message, 'error') } finally { setBusy(false) }
+  }
+  if (st.error) return <ErrorBox error={st.error} />
+  if (!st.data) return <Loading />
+  const s = st.data
+  const withContact = s.waiting.filter((w) => w.contact_id)
+  return (
+    <div className="space-y-6">
+      {s.emergencyStop.active && <Notice tone="red" title="STOP ALL OUTREACH is active">Nothing is sent until you resume in Outreach Controls.</Notice>}
+      {s.pause.reason && !s.enabled && <Notice tone="amber" title="UGC autopilot paused itself">{s.pause.reason}</Notice>}
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Stat label="UGC autopilot" value={s.enabled ? 'On' : 'Off'} tone={s.enabled ? 'good' : 'muted'} hint={s.inSendWindow ? 'Sending hours now' : 'Outside sending hours'} />
+        <Stat label="UGC limit today" value={`${s.today.firstEmails} / ${s.cap}`} hint={`Grows to ${s.config.rampMax} after clean weeks`} />
+        <Stat label="Gmail account today" value={`${s.limits.newEmails.sent} / ${s.limits.newEmails.limit}`} hint={`New emails, both campaigns (${s.limits.tier} tier); ${s.limits.weekNew.sent} / ${s.limits.weekNew.limit} this week`} />
+        <Stat label="Ready to send" value={s.queue.length} />
+        <Stat label="Waiting on you" value={s.waiting.length} tone={s.waiting.length ? 'warn' : 'muted'} hint="Country to confirm" />
+        <Stat label="Errors · bounces (7d)" value={`${s.totals.errors7d} · ${s.totals.bounces7d}`} tone={s.totals.errors7d || s.totals.bounces7d ? 'bad' : 'muted'} />
+      </div>
+
+      <Card title={<span className="flex items-center gap-2">Launch gate {s.gate.passing ? <Badge tone="green">Passing</Badge> : <Badge tone="amber">Not passing</Badge>}</span>}
+        actions={<Button size="sm" disabled={busy} onClick={() => act(() => api.post('/api/ugc/gate'), 'Launch gate checked')}>Check now</Button>}>
+        {s.gate.checks.length ? (
+          <ul className="space-y-1.5 text-sm">{s.gate.checks.map((c) => <li key={c.label}>{c.ok ? '✓' : '✗'} <b>{c.label}</b> <span className="text-zinc-500">· {c.detail}</span></li>)}</ul>
+        ) : <p className="text-sm text-zinc-500">Not checked yet.</p>}
+        {!s.permission.confirmed && (
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why the videos may be shown, e.g. All three are my own content" className="flex-1" />
+            <Button disabled={busy || note.trim().length < 10} onClick={() => act(() => api.post('/api/ugc/videos-permission', { note }), 'Permission recorded')}>Confirm video permission</Button>
+          </div>
+        )}
+      </Card>
+
+      <Card title="Switch">
+        {s.enabled ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm">UGC autopilot sends up to <b>{s.cap}</b> UGC first emails a day, plus due UGC follow-ups, during business hours, inside the shared account limits. Sponsorship autopilot is {s.sponsorshipEnabled ? 'on' : 'off'} and controlled separately.</p>
+            <Button variant="danger" disabled={busy} onClick={() => act(() => api.post('/api/ugc/autopilot', { enable: false }), 'UGC autopilot switched off')}>Switch UGC autopilot off</Button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder={`Type ${s.phrase}`} className="flex-1" />
+            <Button variant="primary" disabled={busy || phrase !== s.phrase} onClick={() => act(() => api.post('/api/ugc/autopilot', { enable: true, phrase }), 'UGC autopilot switched on')}>Switch UGC autopilot on</Button>
+          </div>
+        )}
+        <div className="mt-3 flex gap-2">
+          <Button size="sm" disabled={busy} onClick={() => act(async () => setPlan(await api.post('/api/ugc/autopilot/dry-run')), 'Dry run finished; nothing was sent')}>Dry run (plan only)</Button>
+        </div>
+        {plan && <p className="mt-2 text-sm text-zinc-500">{plan.actions.length ? `Would do: ${plan.actions.join(', ')}.` : plan.note || 'Nothing to do right now.'}</p>}
+      </Card>
+
+      <Card title={`Waiting on you: recipient country (${s.waiting.length})`}>
+        <p className="mb-3 text-sm text-zinc-500">Your rule: a recipient's country is never guessed or taken from a company's headquarters. Confirm the ones you know; only those can be emailed.</p>
+        {withContact.length ? (
+          <>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <Button size="sm" onClick={() => setPicked(picked.size === withContact.length ? new Set() : new Set(withContact.map((w) => w.contact_id!)))}>{picked.size === withContact.length ? 'Clear' : 'Select all'}</Button>
+              <Select value={country} onChange={(e) => setCountry(e.target.value)} className="w-auto">{['US', 'CA', 'GB', 'AU', 'DE', 'FR', 'NL', 'SE', 'IE', 'NZ'].map((c) => <option key={c}>{c}</option>)}</Select>
+              <Button size="sm" variant="primary" disabled={busy || !picked.size} onClick={() => act(async () => { await api.post('/api/ugc/confirm-countries', { contactIds: [...picked], jurisdiction: country }); setPicked(new Set()) }, `Confirmed ${country} for ${picked.size} contact(s)`)}>Confirm {country} for {picked.size} selected</Button>
+            </div>
+            <ul className="max-h-80 divide-y divide-zinc-100 overflow-y-auto text-sm dark:divide-zinc-800">
+              {withContact.map((w) => (
+                <li key={w.id} className="flex items-center gap-3 py-2">
+                  <input type="checkbox" checked={picked.has(w.contact_id!)} onChange={(e) => { const n = new Set(picked); if (e.target.checked) n.add(w.contact_id!); else n.delete(w.contact_id!); setPicked(n) }} aria-label={`Select ${w.company_name}`} />
+                  <a className="font-medium hover:underline" href={`#/prospects/${w.id}`}>{w.company_name}</a>
+                  <span className="text-zinc-500">{w.email}</span>
+                  <span className="ml-auto text-xs text-zinc-500">score {w.fit_score ?? '—'}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : <p className="text-sm text-zinc-500">Nothing waiting.</p>}
+      </Card>
+
+      <Card title={`Ready to send (${s.queue.length})`}>
+        {s.queue.length ? <ul className="text-sm">{s.queue.slice(0, 30).map((q) => <li key={q.id} className="py-1">{q.company_name} · <span className="text-zinc-500">{q.email} · score {q.fit_score}</span></li>)}</ul> : <p className="text-sm text-zinc-500">No UGC company is ready for an automatic email.</p>}
+      </Card>
+
+      <Card title="UGC autopilot activity">
+        {s.events.length ? (
+          <ul className="max-h-96 space-y-1.5 overflow-y-auto text-sm">{s.events.map((e) => <li key={e.id}><span className="text-xs text-zinc-500">{dateTime(e.created_at)}</span> <Badge tone={e.kind === 'error' || e.kind === 'paused' ? 'red' : e.kind === 'sent' ? 'green' : 'gray'}>{e.kind}</Badge> {e.detail}</li>)}</ul>
+        ) : <p className="text-sm text-zinc-500">No activity yet.</p>}
       </Card>
     </div>
   )

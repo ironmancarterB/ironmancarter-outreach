@@ -13,7 +13,9 @@ import { createPitchDraft, updatePitchDraft } from '../gmail/drafts'
 import { gatherFacts } from '../pitch/facts'
 import { runChecks } from '../pitch/checks'
 import { writeTemplate } from '../pitch/template'
-import { approvePitch, generatePitch } from '../pitch/service'
+import { approvePitch, generatePitch, regeneratePitch } from '../pitch/service'
+import { createDeal } from '../ugc/deals'
+import { gateStatus, runLaunchGate } from '../ugc/gate'
 import { getSignature } from '../pitch/signature'
 import { createBatch } from '../research/batches'
 import { calendar, dayKey, isBusinessDay } from './businessDays'
@@ -23,18 +25,26 @@ import { checkThreadBeforeFollowUp, syncConversations } from './sync'
 
 export const AUTOPILOT_MAX_NEW_PER_DAY = 5
 export const AUTOPILOT_PHRASE = 'ENABLE AUTOPILOT'
+// UGC autopilot: its own switch, limits and pause, sharing the account-wide limits, safety brakes, lock and worker.
+export const UGC_AUTOPILOT_PHRASE = 'ENABLE UGC AUTOPILOT'
+export const UGC_AUTOPILOT_HARD_MAX = 10
+export type Campaign = 'sponsorship' | 'ugc'
 const HOLD_HOURS = 24
 const LOCK_MS = 10 * 60_000
 
 export interface AutopilotConfig { dryRun: boolean; newPerDay: number; sendGapMinutes: number; syncEveryMinutes: number; maxErrorsPerDay: number; maxBouncesPerWeek: number }
 export const config = (db: DB) => getSetting<AutopilotConfig>(db, 'outreach.autopilot')
 export const isEnabled = (db: DB) => getSetting<boolean>(db, 'outreach.autopilotEnabled')
+export interface UgcAutopilotConfig { newPerDay: number; rampMax: number; maxBouncesPerWeek: number }
+export const ugcConfig = (db: DB) => getSetting<UgcAutopilotConfig>(db, 'ugc.autopilot')
+export const ugcEnabled = (db: DB) => getSetting<boolean>(db, 'ugc.autopilotEnabled')
+export const campaignEnabled = (db: DB, c: Campaign) => (c === 'ugc' ? ugcEnabled(db) : isEnabled(db))
 const today = (db: DB, now = new Date()) => dayKey(now, calendar(db).timezone)
 
 type EventKind = 'sent' | 'dry_run' | 'skipped' | 'error' | 'paused' | 'enabled' | 'disabled' | 'research' | 'sync' | 'report'
-export function event(db: DB, kind: EventKind, detail: string, o: { prospectId?: number | null; followUpId?: number | null; sendId?: number | null; now?: Date } = {}) {
-  run(db, 'INSERT INTO autopilot_events (day_key, kind, prospect_id, follow_up_id, send_id, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    today(db, o.now), kind, o.prospectId ?? null, o.followUpId ?? null, o.sendId ?? null, detail.slice(0, 2000), (o.now ?? new Date()).toISOString())
+export function event(db: DB, kind: EventKind, detail: string, o: { prospectId?: number | null; followUpId?: number | null; sendId?: number | null; now?: Date; campaign?: Campaign } = {}) {
+  run(db, 'INSERT INTO autopilot_events (day_key, kind, prospect_id, follow_up_id, send_id, detail, created_at, campaign) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    today(db, o.now), kind, o.prospectId ?? null, o.followUpId ?? null, o.sendId ?? null, detail.slice(0, 2000), (o.now ?? new Date()).toISOString(), o.campaign ?? 'sponsorship')
 }
 
 // ---------- Switching on and off ----------
@@ -83,12 +93,14 @@ export function disableAutopilot(db: DB, reason = 'Switched off by you') {
 }
 
 // Stops autopilot after something that needs a person: an uncertain send, repeated errors, bounces, lost Gmail access.
-export function autoPause(db: DB, reason: string) {
-  if (!isEnabled(db)) return
-  setSetting(db, 'outreach.autopilotEnabled', false)
-  setSetting(db, 'outreach.autopilotPause', { reason, at: nowIso() })
-  event(db, 'paused', reason)
-  logActivity(db, 'autopilot.paused', `AUTOPILOT PAUSED: ${reason} Nothing more is sent automatically until you switch it back on.`)
+export function autoPause(db: DB, reason: string, campaign: Campaign | 'both' = 'sponsorship') {
+  if (campaign === 'both') { autoPause(db, reason, 'sponsorship'); autoPause(db, reason, 'ugc'); return }
+  if (!campaignEnabled(db, campaign)) return
+  const ugc = campaign === 'ugc'
+  setSetting(db, ugc ? 'ugc.autopilotEnabled' : 'outreach.autopilotEnabled', false)
+  setSetting(db, ugc ? 'ugc.autopilotPause' : 'outreach.autopilotPause', { reason, at: nowIso() })
+  event(db, 'paused', reason, { campaign })
+  logActivity(db, ugc ? 'ugc.autopilot_paused' : 'autopilot.paused', `${ugc ? 'UGC ' : ''}AUTOPILOT PAUSED: ${reason} Nothing more is sent automatically${ugc ? ' for UGC' : ''} until you switch it back on.`)
 }
 
 export function setDryRun(db: DB, dryRun: boolean) {
@@ -96,6 +108,72 @@ export function setDryRun(db: DB, dryRun: boolean) {
   event(db, dryRun ? 'enabled' : 'enabled', dryRun ? 'Dry-run mode on: autopilot plans but sends nothing.' : 'Dry-run mode off: autopilot sends for real within its limits.')
   logActivity(db, 'autopilot.mode', dryRun ? 'Autopilot dry-run mode on (nothing is sent).' : 'Autopilot dry-run mode OFF: it now sends real emails within its limits.')
   return status(db)
+}
+
+// ---------- UGC autopilot switch ----------
+
+export async function ugcReadiness(db: DB, deps: GmailDeps, fetchImpl: typeof fetch = fetch): Promise<Check[]> {
+  const checks = (await readiness(db, deps)).filter((c) => !/^Media kit|^New first emails capped/.test(c.label))
+  const add = (label: string, ok: boolean, detail: string) => checks.push({ label, ok, detail })
+  const gate = await runLaunchGate(db, fetchImpl)
+  for (const g of gate.checks) add(`Launch gate: ${g.label}`, g.ok, g.detail)
+  const cfg = ugcConfig(db)
+  add(`UGC first emails start at ${cfg.newPerDay} a day (max ${Math.min(cfg.rampMax, UGC_AUTOPILOT_HARD_MAX)})`, cfg.newPerDay >= 1 && cfg.newPerDay <= cfg.rampMax && cfg.rampMax <= UGC_AUTOPILOT_HARD_MAX, 'Always inside the shared account limits, which are never changed automatically')
+  const tmpl = get<{ n: number }>(db, "SELECT count(*) AS n FROM email_templates WHERE campaign_type = 'ugc' AND kind = 'initial'")!.n
+  add('UGC templates', tmpl > 0, `${tmpl} first-email template(s)`)
+  add('STOP ALL OUTREACH is off', !stopState(db).active, stopState(db).active ? 'Resume outreach first' : 'Off')
+  return checks
+}
+
+export async function enableUgcAutopilot(db: DB, deps: GmailDeps, phrase: unknown, fetchImpl: typeof fetch = fetch) {
+  if (phrase !== UGC_AUTOPILOT_PHRASE) throw new AppError(400, 'phrase', `Type ${UGC_AUTOPILOT_PHRASE} to confirm.`)
+  const failing = (await ugcReadiness(db, deps, fetchImpl)).filter((c) => !c.ok)
+  if (failing.length) throw new AppError(409, 'checklist', `Not ready: ${failing.map((c) => `${c.label} (${c.detail})`).join('; ')}.`, failing)
+  setSetting(db, 'ugc.autopilotEnabled', true)
+  setSetting(db, 'ugc.autopilotPause', { reason: null, at: null })
+  const cap = ugcCap(db)
+  event(db, 'enabled', `UGC autopilot switched on: up to ${cap} UGC first emails a day plus due UGC follow-ups, inside the shared account limits.`, { campaign: 'ugc' })
+  logActivity(db, 'ugc.autopilot_enabled', `UGC autopilot switched ON: up to ${cap} first emails a day (growing only after clean weeks), follow-ups when due, business hours only.`)
+  return ugcStatus(db)
+}
+
+export function disableUgcAutopilot(db: DB, reason = 'Switched off by you') {
+  setSetting(db, 'ugc.autopilotEnabled', false)
+  event(db, 'disabled', reason, { campaign: 'ugc' })
+  logActivity(db, 'ugc.autopilot_disabled', `UGC autopilot switched off: ${reason}`)
+  return ugcStatus(db)
+}
+
+export function ugcStatus(db: DB, now = new Date()) {
+  const n = (sql: string, ...p: (string | number)[]) => get<{ n: number }>(db, sql, ...p)!.n
+  const ready = ugcCandidates(db, now)
+  const waiting = listLeads(db).filter((l) => l.campaign_type === 'ugc' && l.actionable && l.needs_before_send.length)
+  const limits = limitsStatus(db, now)
+  return {
+    enabled: ugcEnabled(db),
+    config: ugcConfig(db),
+    cap: ugcCap(db, now),
+    hardMax: UGC_AUTOPILOT_HARD_MAX,
+    phrase: UGC_AUTOPILOT_PHRASE,
+    pause: getSetting<{ reason: string | null; at: string | null }>(db, 'ugc.autopilotPause'),
+    gate: gateStatus(db, now),
+    permission: getSetting<{ confirmed: boolean; note: string | null; at: string | null }>(db, 'ugc.videosPermission'),
+    emergencyStop: stopState(db),
+    sponsorshipEnabled: isEnabled(db),
+    inSendWindow: inSendWindow(db, now),
+    limits,
+    today: { firstEmails: sentToday(db, now, 'initial', 'ugc'), followUps: sentToday(db, now, 'follow_up', 'ugc') },
+    queue: ready.map((l) => ({ id: l.id, company_name: l.company_name, email: l.email, fit_score: l.fit_score })),
+    waiting: waiting.map((l) => ({ id: l.id, company_name: l.company_name, email: l.email, contact_id: l.contact_id, fit_score: l.fit_score, needs: l.needs_before_send })),
+    totals: {
+      sent: n("SELECT count(*) AS n FROM send_attempts s JOIN prospects p ON p.id = s.prospect_id WHERE s.kind = 'initial' AND s.status = 'sent' AND p.campaign_type = 'ugc'"),
+      followUpsSent: n("SELECT count(*) AS n FROM send_attempts s JOIN prospects p ON p.id = s.prospect_id WHERE s.kind = 'follow_up' AND s.status = 'sent' AND p.campaign_type = 'ugc'"),
+      errors7d: n("SELECT count(*) AS n FROM autopilot_events WHERE campaign = 'ugc' AND kind = 'error' AND created_at >= ?", new Date(now.getTime() - 7 * 86_400_000).toISOString()),
+      bounces7d: ugcBounces(db, now),
+      followUpsPending: n("SELECT count(*) AS n FROM follow_ups f JOIN prospects p ON p.id = f.prospect_id WHERE f.status IN ('scheduled', 'approved') AND p.campaign_type = 'ugc'"),
+    },
+    events: all<{ id: number; kind: string; detail: string; prospect_id: number | null; created_at: string }>(db, "SELECT id, kind, detail, prospect_id, created_at FROM autopilot_events WHERE campaign = 'ugc' ORDER BY id DESC LIMIT 60"),
+  }
 }
 
 // ---------- One run ----------
@@ -131,17 +209,56 @@ export function candidates(db: DB, now = new Date()): Lead[] {
   return listLeads(db).filter((l) => l.campaign_type === 'sponsorship' && l.actionable && !l.needs_before_send.length && l.outreach_status !== 'gmail_draft' && !held(db, `p:${l.id}`, now))
 }
 
-const sentToday = (db: DB, now: Date, kind: 'initial' | 'follow_up') => get<{ n: number }>(db,
-  "SELECT count(*) AS n FROM send_attempts WHERE initiated_by = 'autopilot' AND kind = ? AND day_key = ? AND status IN ('sending', 'sent', 'uncertain')", kind, today(db, now))!.n
+const sentToday = (db: DB, now: Date, kind: 'initial' | 'follow_up', campaign: Campaign = 'sponsorship') => get<{ n: number }>(db,
+  `SELECT count(*) AS n FROM send_attempts s JOIN prospects p ON p.id = s.prospect_id WHERE s.initiated_by = 'autopilot' AND s.kind = ? AND s.day_key = ?
+    AND s.status IN ('sending', 'sent', 'uncertain') AND p.campaign_type = ?`, kind, today(db, now), campaign)!.n
+
+// UGC companies autopilot may write to: a qualifying public email, a recipient that needs nothing from you (country
+// confirmed, research fresh), a lead score at or above your minimum, not rejected and not on hold. Best score first.
+export function ugcCandidates(db: DB, now = new Date()): Lead[] {
+  const min = getSetting<{ minScore: number }>(db, 'ugc.research').minScore
+  return listLeads(db).filter((l) => l.campaign_type === 'ugc' && l.actionable && !l.needs_before_send.length && l.review_status !== 'rejected'
+    && (l.fit_score ?? 0) >= min && !held(db, `p:${l.id}`, now)).sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
+}
+
+// Today's UGC cap: starts at newPerDay and moves one step a week: up after a clean week with real volume, down after
+// any bounce. Never above rampMax or the hard maximum, and always inside the shared account limits.
+export function ugcCap(db: DB, now = new Date()) {
+  const cfg = ugcConfig(db)
+  const ramp = getSetting<{ cap: number | null; reviewedAt: string | null }>(db, 'ugc.autopilotRamp')
+  const max = Math.min(cfg.rampMax, UGC_AUTOPILOT_HARD_MAX)
+  let cap = Math.min(Math.max(ramp.cap ?? cfg.newPerDay, 1), max)
+  if (!ramp.reviewedAt) {
+    setSetting(db, 'ugc.autopilotRamp', { cap, reviewedAt: now.toISOString() })
+  } else if (now.getTime() - new Date(ramp.reviewedAt).getTime() >= 7 * 86_400_000) {
+    const since = new Date(now.getTime() - 7 * 86_400_000).toISOString()
+    const sends = get<{ n: number }>(db, `SELECT count(*) AS n FROM send_attempts s JOIN prospects p ON p.id = s.prospect_id
+      WHERE s.initiated_by = 'autopilot' AND s.kind = 'initial' AND s.status = 'sent' AND p.campaign_type = 'ugc' AND s.sent_at >= ?`, since)!.n
+    const bounces = ugcBounces(db, now)
+    const before = cap
+    if (bounces > 0) cap = Math.max(1, cap - 1)
+    else if (sends >= cap * 3) cap = Math.min(cap + 1, max)
+    setSetting(db, 'ugc.autopilotRamp', { cap, reviewedAt: now.toISOString() })
+    if (cap !== before) event(db, 'report', `UGC daily limit ${cap > before ? 'raised' : 'lowered'} from ${before} to ${cap} (${sends} sent and ${bounces} bounce(s) in the last 7 days).`, { campaign: 'ugc', now })
+  }
+  return cap
+}
+
+const ugcBounces = (db: DB, now: Date) => get<{ n: number }>(db, `SELECT count(*) AS n FROM suppressions WHERE source = 'bounce' AND created_at >= ?
+  AND value IN (SELECT s.recipient FROM send_attempts s JOIN prospects p ON p.id = s.prospect_id WHERE s.initiated_by = 'autopilot' AND p.campaign_type = 'ugc')`,
+  new Date(now.getTime() - 7 * 86_400_000).toISOString())!.n
 
 export interface TickResult { ran: boolean; dryRun: boolean; note: string; actions: string[] }
 
-export async function tick(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?: RouterDeps; now?: Date; forceDryRun?: boolean; holder?: string }): Promise<TickResult> {
+export async function tick(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?: RouterDeps; now?: Date; forceDryRun?: boolean; holder?: string; campaigns?: Campaign[] }): Promise<TickResult> {
   const now = opts.now ?? new Date()
   const cfg = config(db)
   const dry = !!opts.forceDryRun || cfg.dryRun
   const result: TickResult = { ran: false, dryRun: dry, note: '', actions: [] }
-  if (!isEnabled(db) && !opts.forceDryRun) return { ...result, note: 'Autopilot is off.' }
+  // Each campaign runs only while its own switch is on; a forced dry run plans the campaigns asked for.
+  const sponsorshipOn = opts.forceDryRun ? (opts.campaigns ?? ['sponsorship']).includes('sponsorship') : isEnabled(db)
+  const ugcOn = opts.forceDryRun ? (opts.campaigns ?? []).includes('ugc') : ugcEnabled(db)
+  if (!sponsorshipOn && !ugcOn) return { ...result, note: 'Autopilot is off.' }
   const holder = opts.holder ?? `pid${process.pid}`
   if (!acquire(db, holder, now.getTime())) return { ...result, note: 'Another autopilot run is in progress.' }
   try {
@@ -152,15 +269,21 @@ export async function tick(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?
     // Safety brakes: anything that needs a person stops autopilot.
     if (!dry) {
       const uncertain = get<{ recipient: string }>(db, "SELECT recipient FROM send_attempts WHERE status = 'uncertain' LIMIT 1")
-      if (uncertain) { autoPause(db, `A send to ${uncertain.recipient} has an uncertain result. Reconcile it in Outreach → Sent.`); return { ...result, note: 'Paused: uncertain send.' } }
+      // Account-wide brakes (one Gmail account): they pause both campaigns.
+      if (uncertain) { autoPause(db, `A send to ${uncertain.recipient} has an uncertain result. Reconcile it in Outreach → Sent.`, 'both'); return { ...result, note: 'Paused: uncertain send.' } }
       const errors = get<{ n: number }>(db, "SELECT count(*) AS n FROM autopilot_events WHERE kind = 'error' AND day_key = ?", today(db, now))!.n
-      if (errors >= cfg.maxErrorsPerDay) { autoPause(db, `${errors} errors today (limit ${cfg.maxErrorsPerDay}). Check Autopilot → Activity.`); return { ...result, note: 'Paused: errors.' } }
+      if (errors >= cfg.maxErrorsPerDay) { autoPause(db, `${errors} errors today (limit ${cfg.maxErrorsPerDay}). Check Autopilot → Activity.`, 'both'); return { ...result, note: 'Paused: errors.' } }
+      // Bounce brakes are per campaign.
       const bounces = get<{ n: number }>(db, `SELECT count(*) AS n FROM suppressions WHERE source = 'bounce' AND created_at >= ?
-        AND value IN (SELECT recipient FROM send_attempts WHERE initiated_by = 'autopilot')`, new Date(now.getTime() - 7 * 86_400_000).toISOString())!.n
-      if (bounces >= cfg.maxBouncesPerWeek) { autoPause(db, `${bounces} autopilot emails hard-bounced in 7 days (limit ${cfg.maxBouncesPerWeek}). Check the addresses before resuming.`); return { ...result, note: 'Paused: bounces.' } }
+        AND value IN (SELECT s.recipient FROM send_attempts s LEFT JOIN prospects p ON p.id = s.prospect_id WHERE s.initiated_by = 'autopilot' AND COALESCE(p.campaign_type, 'sponsorship') = 'sponsorship')`, new Date(now.getTime() - 7 * 86_400_000).toISOString())!.n
+      if (sponsorshipOn && bounces >= cfg.maxBouncesPerWeek) { autoPause(db, `${bounces} autopilot emails hard-bounced in 7 days (limit ${cfg.maxBouncesPerWeek}). Check the addresses before resuming.`); return { ...result, note: 'Paused: bounces.' } }
+      if (ugcOn) {
+        const ub = ugcBounces(db, now)
+        if (ub >= ugcConfig(db).maxBouncesPerWeek) autoPause(db, `${ub} UGC autopilot emails hard-bounced in 7 days (limit ${ugcConfig(db).maxBouncesPerWeek}). Check the addresses before resuming.`, 'ugc')
+      }
       try {
         const { account } = await accessToken(db, deps)
-        if (missingScopes(account).length) { autoPause(db, 'Gmail permissions are missing. Reconnect Gmail in Settings → Gmail.'); return { ...result, note: 'Paused: Gmail permissions.' } }
+        if (missingScopes(account).length) { autoPause(db, 'Gmail permissions are missing. Reconnect Gmail in Settings → Gmail.', 'both'); return { ...result, note: 'Paused: Gmail permissions.' } }
       } catch (err) {
         event(db, 'error', `Gmail is unavailable: ${(err as Error).message}`, { now })
         return { ...result, note: 'Gmail unavailable.' }
@@ -171,6 +294,7 @@ export async function tick(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?
         try {
           const s = await syncConversations(db, deps, { ai: opts.ai })
           if (s.messagesAdded || s.errors.length) event(db, 'sync', `Checked ${s.threadsChecked} conversations: ${s.replies} repl${s.replies === 1 ? 'y' : 'ies'}, ${s.followUpsCancelled} follow-up(s) stopped${s.errors.length ? `, ${s.errors.length} error(s)` : ''}.`, { now })
+          interestedUgcStep(db, now)
         } catch (err) {
           event(db, 'error', `Checking Gmail for replies failed: ${(err as Error).message}`, { now })
           return { ...result, note: 'Reply check failed; nothing sent.' }
@@ -185,25 +309,32 @@ export async function tick(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?
     if (!dry && lastSend && now.getTime() - new Date(lastSend).getTime() < cfg.sendGapMinutes * 60_000) return { ...result, note: `Waiting: at least ${cfg.sendGapMinutes} minutes between emails.` }
 
     const limits = limitsStatus(db, now)
-    if (await followUpStep(db, deps, opts, cfg, dry, now, limits, result)) return result
-    await firstEmailStep(db, deps, opts, cfg, dry, now, limits, result)
-    if (!dry) researchStep(db, cfg, now, result)
+    const campaigns: Campaign[] = [...(sponsorshipOn ? ['sponsorship' as const] : []), ...(ugcOn ? ['ugc' as const] : [])]
+    if (await followUpStep(db, deps, opts, cfg, dry, now, limits, result, campaigns)) return result
+    if (sponsorshipOn) {
+      const before = result.actions.length
+      await firstEmailStep(db, deps, opts, cfg, dry, now, limits, result)
+      if (!dry) researchStep(db, cfg, now, result)
+      if (result.actions.length > before && !dry) return result
+    }
+    if (ugcOn) await ugcFirstEmailStep(db, deps, opts, dry, now, limitsStatus(db, now), result)
     return result
   } finally {
     release(db, holder)
   }
 }
 
-async function followUpStep(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?: RouterDeps }, cfg: AutopilotConfig, dry: boolean, now: Date, limits: ReturnType<typeof limitsStatus>, result: TickResult) {
+async function followUpStep(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?: RouterDeps }, cfg: AutopilotConfig, dry: boolean, now: Date, limits: ReturnType<typeof limitsStatus>, result: TickResult, campaigns: Campaign[] = ['sponsorship']) {
   if (limits.followUps.remaining <= 0 || limits.total.remaining <= 0) {
     result.note = `Follow-up limit reached today (${limits.followUps.sent} of ${limits.followUps.limit} follow-ups, ${limits.total.sent} of ${limits.total.limit} emails).`
     return false
   }
   reconcileFollowUps(db)
-  // UGC follow-ups wait for your approval; autopilot only handles sponsorship follow-ups.
-  const due = all<FollowUpRow>(db, `SELECT f.* FROM follow_ups f JOIN prospects p ON p.id = f.prospect_id
-    WHERE f.status IN ('scheduled', 'approved') AND f.due_at <= ? AND p.campaign_type = 'sponsorship' ORDER BY f.due_at, f.sequence`, now.toISOString())
+  // Only follow-ups of campaigns whose autopilot is on; the others wait for you.
+  const due = all<FollowUpRow & { campaign_type: Campaign }>(db, `SELECT f.*, p.campaign_type FROM follow_ups f JOIN prospects p ON p.id = f.prospect_id
+    WHERE f.status IN ('scheduled', 'approved') AND f.due_at <= ? AND p.campaign_type IN (${campaigns.map(() => '?').join(', ') || "''"}) ORDER BY f.due_at, f.sequence`, now.toISOString(), ...campaigns)
   for (const row of due) {
+    const campaign = row.campaign_type
     const key = `f:${row.id}`
     if (held(db, key, now)) continue
     const earlier = row.sequence === 2 ? get<{ status: string }>(db, 'SELECT status FROM follow_ups WHERE initial_send_id = ? AND sequence = 1', row.initial_send_id) : undefined
@@ -217,7 +348,7 @@ async function followUpStep(db: DB, deps: GmailDeps, opts: { dataDir: string; ai
       const problems = followUpChecks(db, f)
       if (problems.length) { hold(db, key, problems.join(' '), now); event(db, 'skipped', `Follow-up ${f.sequence} to ${original.recipient} not sent: ${problems.join(' ')}`, { prospectId: f.prospect_id, followUpId: f.id, now }); continue }
       if (dry) {
-        event(db, 'dry_run', `Would send follow-up ${f.sequence} to ${original.recipient} ("${f.subject}").`, { prospectId: f.prospect_id, followUpId: f.id, now })
+        event(db, 'dry_run', `Would send follow-up ${f.sequence} to ${original.recipient} ("${f.subject}").`, { prospectId: f.prospect_id, followUpId: f.id, now, campaign })
         result.actions.push(`follow-up ${f.sequence} → ${original.recipient}`)
         return true
       }
@@ -225,13 +356,13 @@ async function followUpStep(db: DB, deps: GmailDeps, opts: { dataDir: string; ai
       if (!liveFollowUpDraft(db, f.id)) await createFollowUpDraft(db, deps, opts.dataDir, f.id)
       const r = await autopilotSend(db, deps, { kind: 'follow_up', followUpId: f.id })
       if (r.sent) {
-        event(db, 'sent', `Sent follow-up ${f.sequence} to ${r.sent.recipient}.`, { prospectId: f.prospect_id, followUpId: f.id, sendId: r.sent.id, now })
+        event(db, 'sent', `Sent ${campaign === 'ugc' ? 'UGC ' : ''}follow-up ${f.sequence} to ${r.sent.recipient}.`, { prospectId: f.prospect_id, followUpId: f.id, sendId: r.sent.id, now, campaign })
         result.actions.push(`follow-up ${f.sequence} → ${r.sent.recipient}`)
         return true
       }
       const why = r.failing.map((c) => `${c.label}: ${c.detail}`).join('; ')
       hold(db, key, why, now)
-      event(db, 'skipped', `Follow-up ${f.sequence} to ${original.recipient} not sent: ${why}`, { prospectId: f.prospect_id, followUpId: f.id, now })
+      event(db, 'skipped', `Follow-up ${f.sequence} to ${original.recipient} not sent: ${why}`, { prospectId: f.prospect_id, followUpId: f.id, now, campaign })
     } catch (err) {
       handleError(db, err, `follow-up to ${original.recipient}`, { prospectId: row.prospect_id, followUpId: row.id, now })
       hold(db, key, (err as Error).message, now)
@@ -291,6 +422,82 @@ async function firstEmailStep(db: DB, deps: GmailDeps, opts: { dataDir: string; 
   if (!result.actions.length) result.note ||= 'No brand is ready for an automatic first email right now.'
 }
 
+// UGC first emails: same send path and checks as every other email (fresh Gmail read-back, do-not-contact list,
+// one first email per company and per address, shared account limits). The launch gate must be passing.
+async function ugcFirstEmailStep(db: DB, deps: GmailDeps, opts: { dataDir: string; ai?: RouterDeps }, dry: boolean, now: Date, limits: ReturnType<typeof limitsStatus>, result: TickResult) {
+  const say = (n: string) => { result.note = `${result.note ? `${result.note} ` : ''}${n}` }
+  const gate = gateStatus(db, now)
+  if (!gate.passing) { say(gate.fresh ? 'UGC: the launch gate is failing, so no UGC email is sent.' : 'UGC: the launch gate needs checking again.'); return }
+  const cap = ugcCap(db, now)
+  const done = dry ? 0 : sentToday(db, now, 'initial', 'ugc')
+  const room = Math.min(cap - done, limits.newEmails.remaining, limits.weekNew.remaining, limits.total.remaining)
+  if (room <= 0) { say(`UGC daily limit reached (${done} of ${cap} UGC first emails; shared limits: ${limits.newEmails.sent} of ${limits.newEmails.limit} new today, ${limits.weekNew.sent} of ${limits.weekNew.limit} this week).`); return }
+  const portfolio = gate.checks.length ? getSetting<string>(db, 'ugc.portfolioUrl') : ''
+  let attempts = 0
+  for (const lead of ugcCandidates(db, now)) {
+    if (attempts++ >= (dry ? room : 3)) break
+    const key = `p:${lead.id}`
+    try {
+      let open = get<{ id: number; status: string; body: string; edited: number }>(db, "SELECT id, status, body, edited FROM pitches WHERE prospect_id = ? AND channel = 'email' AND status IN ('draft', 'approved') ORDER BY id DESC LIMIT 1", lead.id)
+      if (dry) {
+        event(db, 'dry_run', `Would email ${lead.company_name} at ${lead.email} (UGC pitch${open ? ` v${open.id}` : ' to be written'}, portfolio ${portfolio}).`, { prospectId: lead.id, now, campaign: 'ugc' })
+        result.actions.push(`UGC first email → ${lead.email} (${lead.company_name})`)
+        continue
+      }
+      // A pitch written before the portfolio link was verified is rewritten (never one you edited yourself).
+      if (open && !open.edited && portfolio && !open.body.includes(portfolio)) open = { ...open, id: (await regeneratePitch(db, open.id)).id, status: 'draft' }
+      const pitchId = open?.id ?? (await generatePitch(db, lead.id, { channel: 'email' })).id
+      if (!open || open.status === 'draft') approvePitch(db, pitchId)
+      const draft = get<{ id: number; edited_in_gmail: number }>(db, "SELECT id, edited_in_gmail FROM gmail_drafts WHERE prospect_id = ? AND kind = 'pitch' AND status IN ('creating', 'created', 'uncertain')", lead.id)
+      if (draft?.edited_in_gmail) {
+        hold(db, key, 'You edited this Gmail draft; autopilot leaves it for you to send or update.', now, 24 * 30)
+        event(db, 'skipped', `${lead.company_name}: you edited the Gmail draft, so autopilot leaves it to you.`, { prospectId: lead.id, now, campaign: 'ugc' })
+        continue
+      }
+      if (draft) await updatePitchDraft(db, deps, opts.dataDir, pitchId)
+      else await createPitchDraft(db, deps, opts.dataDir, pitchId)
+      const r = await autopilotSend(db, deps, { kind: 'initial', pitchId })
+      if (r.sent) {
+        event(db, 'sent', `Sent the UGC first email to ${lead.company_name} at ${r.sent.recipient}.`, { prospectId: lead.id, sendId: r.sent.id, now, campaign: 'ugc' })
+        result.actions.push(`UGC first email → ${r.sent.recipient} (${lead.company_name})`)
+        return
+      }
+      const why = r.failing.map((c) => `${c.label}: ${c.detail}`).join('; ')
+      hold(db, key, why, now)
+      event(db, 'skipped', `${lead.company_name} not emailed: ${why}`, { prospectId: lead.id, now, campaign: 'ugc' })
+    } catch (err) {
+      hold(db, key, (err as Error).message, now)
+      if (err instanceof AppError && ['blocked', 'not_qualified', 'review_required', 'edited_in_gmail', 'duplicate', 'gone'].includes(err.code)) {
+        event(db, 'skipped', `${lead.company_name} not emailed: ${err.message}`, { prospectId: lead.id, now, campaign: 'ugc' })
+        continue
+      }
+      handleError(db, err, `UGC first email to ${lead.company_name}`, { prospectId: lead.id, now, campaign: 'ugc' })
+      return
+    }
+  }
+  if (!result.actions.length) say(ugcCandidates(db, now).length ? 'UGC: no email went out this run.' : 'UGC: no company is ready for an automatic email (see UGC → Autopilot for why).')
+}
+
+// A positive reply to a UGC email: follow-ups are already stopped by the reply check; this opens an "Interested" deal
+// (no price, no terms) and tells you on the dashboard. Nothing is answered or agreed automatically.
+export function interestedUgcStep(db: DB, now = new Date()) {
+  const rows = all<{ prospect_id: number; company_name: string; from_email: string; message_id: number }>(db, `SELECT t.prospect_id, p.company_name, m.from_email, m.id AS message_id
+    FROM email_messages m JOIN email_threads t ON t.id = m.thread_id JOIN prospects p ON p.id = t.prospect_id
+    WHERE m.direction = 'inbound' AND m.kind = 'reply' AND m.classification IN ('interested', 'needs_info', 'negotiating') AND p.campaign_type = 'ugc'
+      AND NOT EXISTS (SELECT 1 FROM ugc_deals d WHERE d.prospect_id = t.prospect_id)
+    GROUP BY t.prospect_id`)
+  for (const r of rows) {
+    try {
+      createDeal(db, r.prospect_id, { title: 'Interested (replied to outreach)', status: 'interested', notes: `Opened automatically from the reply by ${r.from_email}. No price, terms or usage rights have been discussed or agreed.` })
+      event(db, 'sync', `INTERESTED: ${r.company_name} replied positively (${r.from_email}). Follow-ups stopped; it is waiting for you in UGC → Pipeline.`, { prospectId: r.prospect_id, now, campaign: 'ugc' })
+      logActivity(db, 'ugc.interested', `${r.company_name} replied with interest. Follow-ups stopped; reply to them yourself.`, { prospectId: r.prospect_id })
+    } catch (err) {
+      event(db, 'error', `Could not open a deal for ${r.company_name}: ${(err as Error).message}`, { prospectId: r.prospect_id, now, campaign: 'ugc' })
+    }
+  }
+  return rows.length
+}
+
 // Keeps a small supply of qualifying brands: one research batch a day when fewer are ready than the daily cap.
 function researchStep(db: DB, cfg: AutopilotConfig, now: Date, result: TickResult) {
   if (candidates(db, now).length >= cfg.newPerDay) return
@@ -305,11 +512,11 @@ function researchStep(db: DB, cfg: AutopilotConfig, now: Date, result: TickResul
   }
 }
 
-function handleError(db: DB, err: unknown, what: string, o: { prospectId?: number; followUpId?: number; now: Date }) {
+function handleError(db: DB, err: unknown, what: string, o: { prospectId?: number; followUpId?: number; now: Date; campaign?: Campaign }) {
   const e = err as AppError
   event(db, 'error', `${what}: ${e.message}`, o)
-  // A send whose result is unknown must be checked by a person before anything else goes out.
-  if (e.code === 'send_uncertain') autoPause(db, `Gmail did not confirm the ${what}. It was not retried; reconcile it in Outreach → Sent.`)
+  // A send whose result is unknown must be checked by a person before anything else goes out (both campaigns stop).
+  if (e.code === 'send_uncertain') autoPause(db, `Gmail did not confirm the ${what}. It was not retried; reconcile it in Outreach → Sent.`, 'both')
 }
 
 // ---------- Reports ----------

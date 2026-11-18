@@ -11,7 +11,10 @@ import { createUgcGmailDrafts, draftCandidates, prepareUgcDrafts } from '../../.
 import { listTemplates, updateTemplate } from '../../../packages/ugc/templates'
 import { createDeal, deleteDeal, listDeals, renderDealTemplate, updateDeal } from '../../../packages/ugc/deals'
 import { UGC_FIT_LABELS } from '../../../packages/ugc/research'
-import { getProspect } from '../../../packages/crm/prospects'
+import { getProspect, updateContact } from '../../../packages/crm/prospects'
+import { disableUgcAutopilot, enableUgcAutopilot, tick, ugcStatus } from '../../../packages/outreach/autopilot'
+import { confirmVideosPermission, runLaunchGate } from '../../../packages/ugc/gate'
+import { discoverCompanies } from '../../../packages/ugc/discovery'
 
 type Body = Record<string, unknown>
 const id = (v: unknown) => {
@@ -86,6 +89,38 @@ export function ugcRoutes(app: FastifyInstance, ctx: { db: DB; gmail: GmailDeps;
     logActivity(db, 'ugc.concepts_edited', 'Edited the UGC video concepts (regenerate the pitch to use them)', { prospectId: p.id })
     return concepts
   })
+
+  // ---------- UGC autopilot ----------
+  app.get('/api/ugc/autopilot', async () => ugcStatus(db))
+  app.post('/api/ugc/autopilot', async (req) => {
+    const b = body(req)
+    if (b.enable === false) return disableUgcAutopilot(db)
+    return enableUgcAutopilot(db, gmail, b.phrase, ctx.fetchImpl ?? fetch)
+  })
+  // Plans one UGC run without sending or writing anything to Gmail.
+  app.post('/api/ugc/autopilot/dry-run', async () => tick(db, gmail, { dataDir, forceDryRun: true, campaigns: ['ugc'], holder: 'ugc-dry-run' }))
+  app.post('/api/ugc/gate', async () => runLaunchGate(db, ctx.fetchImpl ?? fetch))
+  app.post('/api/ugc/videos-permission', async (req) => {
+    try { confirmVideosPermission(db, String(body(req).note ?? '')) } catch (e) { throw invalid((e as Error).message) }
+    return ugcStatus(db)
+  })
+  // Your confirmation of recipient countries (the app never infers a country). Only UGC contacts with an email.
+  app.post('/api/ugc/confirm-countries', async (req) => {
+    const b = body(req)
+    const jurisdiction = String(b.jurisdiction ?? '').toUpperCase()
+    if (!/^[A-Z]{2}$/.test(jurisdiction)) throw invalid('Choose a 2-letter country code')
+    if (!Array.isArray(b.contactIds) || !b.contactIds.length || b.contactIds.length > 200) throw invalid('Choose 1 to 200 contacts')
+    let n = 0
+    for (const raw of b.contactIds) {
+      const c = get<{ id: number; campaign_type: string }>(db, 'SELECT c.id, p.campaign_type FROM contacts c JOIN prospects p ON p.id = c.prospect_id WHERE c.id = ? AND c.email IS NOT NULL', id(raw))
+      if (c?.campaign_type !== 'ugc') continue
+      updateContact(db, c.id, { jurisdiction } as never)
+      n++
+    }
+    logActivity(db, 'ugc.countries_confirmed', `You confirmed ${jurisdiction} as the recipient country for ${n} UGC contact(s).`)
+    return { updated: n, status: ugcStatus(db) }
+  })
+  app.post('/api/ugc/discover', async (req) => discoverCompanies(db, Math.min(400, Math.max(1, Number(body(req).count) || 100)), ctx.fetchImpl ?? fetch))
 
   // ---------- Templates ----------
   app.get('/api/ugc/templates', async () => listTemplates(db))

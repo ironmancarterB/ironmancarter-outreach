@@ -84,10 +84,23 @@ export const UGC_DEFAULT_SETTINGS: Record<string, unknown> = {
   'ugc.portfolioUrl': '',
   'ugc.portfolioCheck': { url: null, ok: false, status: null, detail: null, checkedAt: null },
   // Research volume is separate from sending volume: these never raise any sending limit.
-  'ugc.research': { dailyTarget: 25, autoDaily: true, minScore: 50, autoDraft: true },
+  'ugc.research': { dailyTarget: 50, autoDaily: true, minScore: 50, autoDraft: true },
   'ugc.followUps': { firstAfterBusinessDays: 5, secondAfterBusinessDays: 11, max: 2 },
   'ugc.pricing': { oneVideoUsd: 250, threeVideosUsd: 650, fiveVideosUsd: 1000, monthlyFourFromUsd: 900 },
   'ugc.costs': { dailyAlertUsd: 1 },
   // What the daily UGC run did last (written by the worker).
   'ugc.lastDaily': null,
+  // UGC autopilot (automatic first emails and follow-ups). Off until switched on in UGC → Autopilot after the launch gate
+  // passes. newPerDay is where sending starts; it grows by one a week only after a clean week, up to rampMax, and always
+  // stays inside the shared account limits (sending tier and daily limits), which it never changes.
+  'ugc.autopilotEnabled': false,
+  'ugc.autopilot': { newPerDay: 3, rampMax: 5, maxBouncesPerWeek: 2 },
+  'ugc.autopilotPause': { reason: null, at: null },
+  'ugc.autopilotRamp': { cap: null, reviewedAt: null },
+  // The UGC launch gate: portfolio live, real videos published and playable, permission confirmed, contact details right.
+  'ugc.launchGate': { ok: false, checks: [], checkedAt: null },
+  // Your confirmation that the published portfolio videos may be shown publicly.
+  'ugc.videosPermission': { confirmed: false, note: null, at: null },
+  // Finding new companies beyond the starter list (Wikidata, public and free).
+  'ugc.discovery': { enabled: true, cursors: {}, lastRunDay: null },
 }

@@ -16,7 +16,7 @@ import {
   type SendTarget,
 } from '../../../packages/outreach/send'
 import { checkThreadBeforeFollowUp, syncConversations } from '../../../packages/outreach/sync'
-import { disableAutopilot, enableAutopilot, readiness, setDryRun, status as autopilotStatus, tick } from '../../../packages/outreach/autopilot'
+import { disableAutopilot, disableUgcAutopilot, enableAutopilot, readiness, setDryRun, status as autopilotStatus, tick } from '../../../packages/outreach/autopilot'
 import { CATEGORIES } from '../../../packages/outreach/classify'
 import { refreshSignatures } from '../../../packages/outreach/signatureRefresh'
 
@@ -126,6 +126,7 @@ export function outreachRoutes(app: FastifyInstance, ctx: { db: DB; gmail: Gmail
     if (b.enable === true) return { liveSendingEnabled: setLiveSending(db, true, b.phrase) }
     if (b.enable === false) {
       if (getSetting<boolean>(db, 'outreach.autopilotEnabled')) disableAutopilot(db, 'Live sending was switched off')
+      if (getSetting<boolean>(db, 'ugc.autopilotEnabled')) disableUgcAutopilot(db, 'Live sending was switched off')
       return { liveSendingEnabled: setLiveSending(db, false) }
     }
     throw invalid('enable must be true or false')

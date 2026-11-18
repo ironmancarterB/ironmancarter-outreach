@@ -140,8 +140,12 @@ export function ugcMetrics(db: DB, period: Period, now = new Date()) {
   const closed = n("SELECT count(*) AS n FROM ugc_deals WHERE status IN ('booked', 'delivered') AND booked_at >= ?", since)
   const booked = n("SELECT sum(COALESCE(negotiated_cents, 0) + COALESCE(usage_fee_cents, 0)) AS n FROM ugc_deals WHERE status IN ('booked', 'delivered') AND booked_at >= ?", since)
   const collected = n('SELECT sum(amount_paid_cents) AS n FROM ugc_deals WHERE paid_at >= ?', since)
+  const discovered = n(`SELECT count(*) AS n FROM candidate_pool cp JOIN categories c ON c.id = cp.category_id WHERE c.campaign_type = 'ugc' AND cp.origin = 'discovery' AND cp.added_at >= ?`, since)
+  const sendingErrors = n("SELECT count(*) AS n FROM autopilot_events WHERE campaign = 'ugc' AND kind = 'error' AND created_at >= ?", since)
+  const interestedNew = n("SELECT count(*) AS n FROM ugc_deals WHERE created_at >= ? AND status != 'declined'", since)
   return {
     period, since,
+    discovered, sendingErrors, interestedNew,
     researched, qualified, verifiedContacts, pitchesDrafted, gmailDrafts, approved, sent, followUpsSent, failures, replies, positive, meetings, closed,
     revenueBookedCents: booked, revenueCollectedCents: collected,
     conversion: {

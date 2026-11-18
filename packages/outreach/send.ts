@@ -273,7 +273,12 @@ export async function confirmSend(db: DB, deps: GmailDeps, input: { token?: unkn
 // Autopilot: the same checks as a manual send, including a fresh read-back of the Gmail draft, and the same
 // duplicate protection; only the human confirmation step is replaced by autopilot being switched on.
 export async function autopilotSend(db: DB, deps: GmailDeps, target: SendTarget): Promise<{ sent: SendRow | null; failing: Check[] }> {
-  if (!getSetting<boolean>(db, 'outreach.autopilotEnabled')) throw new AppError(409, 'autopilot_off', 'Autopilot is switched off.')
+  // The switch of the campaign this email belongs to must be on (sponsorship and UGC are separate).
+  const pid = target.kind === 'initial'
+    ? get<{ prospect_id: number }>(db, 'SELECT prospect_id FROM pitches WHERE id = ?', target.pitchId)?.prospect_id
+    : get<{ prospect_id: number }>(db, 'SELECT prospect_id FROM follow_ups WHERE id = ?', target.followUpId)?.prospect_id
+  const campaign = (pid && get<{ campaign_type: string }>(db, 'SELECT campaign_type FROM prospects WHERE id = ?', pid)?.campaign_type) || 'sponsorship'
+  if (!getSetting<boolean>(db, campaign === 'ugc' ? 'ugc.autopilotEnabled' : 'outreach.autopilotEnabled')) throw new AppError(409, 'autopilot_off', `${campaign === 'ugc' ? 'UGC a' : 'A'}utopilot is switched off.`)
   const e = await evaluate(db, deps, target)
   if (!e.ready || !e.draft?.gmail_draft_id || !e.contentSha || !e.preview) return { sent: null, failing: e.checks.filter((c) => !c.ok) }
   const sent = await deliver(db, deps, e, target, { recipient: e.preview.to, subject: e.preview.subject, contentSha: e.contentSha, gmailDraftId: e.draft.gmail_draft_id }, 'autopilot')

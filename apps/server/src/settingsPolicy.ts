@@ -53,6 +53,12 @@ export const LOCKED: Record<string, string> = {
   'ugc.portfolioUrl': 'Set the UGC portfolio link on the UGC page; it is checked live before any email uses it.',
   'ugc.portfolioCheck': 'Written by the live portfolio check.',
   'ugc.lastDaily': 'Written by the daily UGC run.',
+  'ugc.autopilotEnabled': 'Switch UGC autopilot on or off in UGC Clients → Autopilot (it runs the launch gate and checklist first).',
+  'ugc.autopilotPause': 'Set by UGC autopilot when it pauses itself.',
+  'ugc.autopilotRamp': 'Managed by UGC autopilot: the daily limit grows only after a clean week.',
+  'ugc.launchGate': 'Written by the UGC launch gate check.',
+  'ugc.videosPermission': 'Confirm video permission in UGC Clients → Autopilot.',
+  'ugc.discovery': 'Managed by the daily UGC run.',
 }
 
 export const VALIDATORS: Record<string, Validator> = {
@@ -130,6 +136,14 @@ export const VALIDATORS: Record<string, Validator> = {
     return Object.fromEntries(k.map((key) => [key, Math.round(num(1, 100000)(o[key]) as number)]))
   },
   'ugc.costs': (v) => ({ dailyAlertUsd: num(0, 1000)(obj(v).dailyAlertUsd) }),
+  // UGC autopilot limits. More than 10 a day needs a code change; the shared account limits always apply on top.
+  'ugc.autopilot': (v) => {
+    const o = obj(v)
+    const newPerDay = Math.round(num(1, 10)(o.newPerDay) as number)
+    const rampMax = Math.round(num(1, 10)(o.rampMax) as number)
+    if (rampMax < newPerDay) throw invalid('The maximum must be at least the starting limit')
+    return { newPerDay, rampMax, maxBouncesPerWeek: Math.round(num(1, 5)(o.maxBouncesPerWeek) as number) }
+  },
   'outreach.autoEligibleJurisdictions': (v) => {
     if (!Array.isArray(v) || v.some((j) => typeof j !== 'string' || !/^[A-Za-z]{2}$/.test(j))) throw invalid('Expected 2-letter country codes')
     return [...new Set((v as string[]).map((j) => j.toUpperCase()))]

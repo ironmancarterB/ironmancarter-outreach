@@ -501,11 +501,11 @@ describe('dashboard, templates, settings and the daily run', () => {
     expect(getSetting(db, 'outreach.dailyLimits')).toEqual(limits)
   })
 
-  it('the daily run starts one UGC batch per business day, sized to the target', async () => {
+  it('the daily run starts research rounds on business days, sized to the target, one batch at a time', async () => {
     const now = new Date('2026-11-17T18:00:00Z') // a Tuesday
     let s = await ugcDailyStep(db, { gmail: null, dataDir: dir, now, fetchImpl: web.fetchImpl })
     expect(s.batchId).toBeGreaterThan(0)
-    expect(get(db, 'SELECT requested_size, campaign_type, origin FROM research_batches WHERE id = ?', s.batchId)).toEqual({ requested_size: 25, campaign_type: 'ugc', origin: 'daily' })
+    expect(get(db, 'SELECT requested_size, campaign_type, origin FROM research_batches WHERE id = ?', s.batchId)).toEqual({ requested_size: 50, campaign_type: 'ugc', origin: 'daily' })
     s = await ugcDailyStep(db, { gmail: null, dataDir: dir, now, fetchImpl: web.fetchImpl })
     expect(get(db, 'SELECT count(*) AS n FROM research_batches')).toEqual({ n: 1 })
     // Not on weekends.
