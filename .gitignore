@@ -10,3 +10,25 @@ data/
 .env
 .env.*
 !.env.example
+
+# Baseline excludes (secrets, deps, builds, logs, large media)
+venv/
+.venv
+__pycache__/
+build/
+*.log
+logs/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.m4v
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.aiff
+*.braw
+*.r3d
